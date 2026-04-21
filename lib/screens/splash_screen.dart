@@ -77,7 +77,7 @@ class _SplashScreenState extends State<SplashScreen>
             child: FadeTransition(
               opacity: _logoFade,
               child: Text(
-                'Nexaryo SG',
+                'Buzz Bee',
                 style: TextStyle(
                   fontFamily: 'Miloner',
                   fontSize: 52,

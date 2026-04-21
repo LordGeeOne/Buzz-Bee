@@ -1,4 +1,4 @@
-package com.example.nexaryo_style_guide
+package com.nexaryo.buzz
 
 import io.flutter.embedding.android.FlutterActivity
 

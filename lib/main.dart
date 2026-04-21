@@ -1,19 +1,37 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'firebase_options.dart';
 import 'providers/settings_provider.dart';
 import 'providers/theme_provider.dart';
+import 'services/buzz_notifier.dart';
+import 'services/fcm_service.dart';
+import 'services/presence_service.dart';
 import 'theme/nexaryo_colors.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/settings/login_screen.dart';
+import 'screens/settings/onboarding_screen.dart';
 import 'screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   final settings = SettingsProvider();
   final themeProvider = ThemeProvider();
   await Future.wait([settings.load(), themeProvider.load()]);
+  BuzzNotifier.instance.start();
+  await FcmService.instance.start();
+  if (FirebaseAuth.instance.currentUser != null) {
+    PresenceService.instance.start();
+  }
   runApp(NexaryoStyleGuide(settings: settings, themeProvider: themeProvider));
 }
+
+final navigatorKey = GlobalKey<NavigatorState>();
 
 class NexaryoStyleGuide extends StatelessWidget {
   final SettingsProvider settings;
@@ -35,7 +53,8 @@ class NexaryoStyleGuide extends StatelessWidget {
       child: Consumer<ThemeProvider>(
         builder: (context, theme, _) {
           return MaterialApp(
-            title: 'Nexaryo SG',
+            navigatorKey: navigatorKey,
+            title: 'Buzz Bee',
             debugShowCheckedModeBanner: false,
             theme: _buildThemeData(theme.lightColors, Brightness.light),
             darkTheme: _buildThemeData(theme.darkColors, Brightness.dark),
@@ -77,20 +96,95 @@ ThemeData _buildThemeData(NexaryoColors c, Brightness brightness) {
 class _SplashEntry extends StatelessWidget {
   const _SplashEntry();
 
+  void _goToDashboard() {
+    navigatorKey.currentState?.pushReplacement(
+      PageRouteBuilder(
+        opaque: false,
+        pageBuilder: (_, __, ___) => const DashboardScreen(),
+        transitionDuration: const Duration(milliseconds: 800),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
+  void _goToOnboarding() {
+    navigatorKey.currentState?.pushReplacement(
+      PageRouteBuilder(
+        opaque: false,
+        pageBuilder: (_, __, ___) =>
+            OnboardingScreen(onComplete: () => _goToDashboard()),
+        transitionDuration: const Duration(milliseconds: 800),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
+  void _goToLogin() {
+    navigatorKey.currentState?.pushReplacement(
+      PageRouteBuilder(
+        opaque: false,
+        pageBuilder: (_, __, ___) => LoginScreen(
+          onSignedIn: () async {
+            PresenceService.instance.start();
+            final complete = await _isOnboardingComplete();
+            if (complete) {
+              _goToDashboard();
+            } else {
+              _goToOnboarding();
+            }
+          },
+        ),
+        transitionDuration: const Duration(milliseconds: 800),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
+  }
+
+  Future<bool> _isOnboardingComplete() async {
+    // Check local cache first
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('onboarding_complete') == true) return true;
+
+    // Check Firestore
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final complete = doc.data()?['onboardingComplete'] == true;
+      if (complete) {
+        await prefs.setBool('onboarding_complete', true);
+      }
+      return complete;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SplashScreen(
-      onFinished: () {
-        Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            opaque: false,
-            pageBuilder: (_, __, ___) => const DashboardScreen(),
-            transitionDuration: const Duration(milliseconds: 800),
-            transitionsBuilder: (_, animation, __, child) {
-              return FadeTransition(opacity: animation, child: child);
-            },
-          ),
-        );
+      onFinished: () async {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          _goToLogin();
+        } else {
+          final complete = await _isOnboardingComplete();
+          if (complete) {
+            _goToDashboard();
+          } else {
+            _goToOnboarding();
+          }
+        }
       },
     );
   }

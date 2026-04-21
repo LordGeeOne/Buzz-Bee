@@ -1,6 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
+import '../services/connection_service.dart';
 import '../theme/nexaryo_colors.dart';
 
 class StyleGuideHome extends StatelessWidget {
@@ -17,131 +19,37 @@ class StyleGuideHome extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(height: 20),
-          Text(
-            'Nexaryo',
-            style: TextStyle(
-              fontFamily: 'Miloner',
-              fontSize: 36,
-              fontWeight: FontWeight.w700,
-              color: c.textPrimary,
-            ),
-          ),
-          Text(
-            'Style Guide',
-            style: GoogleFonts.montserrat(
-              fontSize: 36,
-              fontWeight: FontWeight.w700,
-              color: c.primary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'The canonical design reference and development framework for all Nexaryo applications.',
-            style: GoogleFonts.montserrat(
-              fontSize: 15,
-              height: 1.5,
-              color: c.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 32),
-
-          // Design Tokens
-          _groupLabel(context, 'Design Tokens'),
-          const SizedBox(height: 10),
           _sectionCard(
             context,
-            icon: HugeIcons.strokeRoundedPaintBoard,
-            title: 'Colors',
-            description: 'The shared dark color palette',
+            icon: HugeIcons.strokeRoundedVibrate,
+            title: 'Buzz Bee',
+            description: "vibrate your partner's phone",
             index: 1,
+            badge: _BuzzBeeBadge(),
           ),
           _sectionCard(
             context,
-            icon: HugeIcons.strokeRoundedTextFont,
-            title: 'Typography',
-            description: 'Montserrat type scale & weights',
+            icon: HugeIcons.strokeRoundedImage01,
+            title: 'Buzz Pic',
+            description: 'send a quick picture',
             index: 2,
           ),
           _sectionCard(
             context,
-            icon: HugeIcons.strokeRoundedSmile,
-            title: 'Icons',
-            description: 'HugeIcons stroke-rounded icon sets',
+            icon: HugeIcons.strokeRoundedTextFont,
+            title: 'Buzz Word',
+            description: 'send a short message',
             index: 3,
           ),
           _sectionCard(
             context,
-            icon: HugeIcons.strokeRoundedAlignTop,
-            title: 'Spacing',
-            description: 'Spacing scale & border radii',
-            index: 7,
-          ),
-          const SizedBox(height: 24),
-
-          // Components
-          _groupLabel(context, 'Components'),
-          const SizedBox(height: 10),
-          _sectionCard(
-            context,
-            icon: HugeIcons.strokeRoundedTouchInteraction01,
-            title: 'Buttons',
-            description: 'Button variants & states',
+            icon: HugeIcons.strokeRoundedMic01,
+            title: 'Buzz Voice',
+            description: 'send a voice note',
             index: 4,
-          ),
-          _sectionCard(
-            context,
-            icon: HugeIcons.strokeRoundedCrop,
-            title: 'Cards',
-            description: 'Card components & layouts',
-            index: 5,
-          ),
-          _sectionCard(
-            context,
-            icon: HugeIcons.strokeRoundedInputText,
-            title: 'Inputs',
-            description: 'Fields, sliders, toggles',
-            index: 6,
-          ),
-          const SizedBox(height: 24),
-
-          // Framework
-          _groupLabel(context, 'Framework'),
-          const SizedBox(height: 10),
-          _sectionCard(
-            context,
-            icon: HugeIcons.strokeRoundedFolder01,
-            title: 'File Structure',
-            description: 'Standard project layout & organization',
-            index: 8,
-          ),
-          _sectionCard(
-            context,
-            icon: HugeIcons.strokeRoundedTag01,
-            title: 'Naming Conventions',
-            description: 'Files, classes, variables, widgets',
-            index: 9,
-          ),
-          _sectionCard(
-            context,
-            icon: HugeIcons.strokeRoundedGridView,
-            title: 'Patterns',
-            description: 'One-handed mode, state, navigation',
-            index: 10,
           ),
           const SizedBox(height: 40),
         ],
-      ),
-    );
-  }
-
-  Widget _groupLabel(BuildContext context, String text) {
-    return Text(
-      text,
-      style: GoogleFonts.montserrat(
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 1.2,
-        color: context.colors.textDim,
       ),
     );
   }
@@ -152,6 +60,7 @@ class StyleGuideHome extends StatelessWidget {
     required String title,
     required String description,
     required int index,
+    Widget? badge,
   }) {
     final c = context.colors;
     return Padding(
@@ -170,20 +79,27 @@ class StyleGuideHome extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: c.cardBorder,
-                    borderRadius: BorderRadius.circular(34),
-                  ),
-                  child: Center(
-                    child: HugeIcon(
-                      icon: icon,
-                      color: c.textSecondary,
-                      size: 20,
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: c.cardBorder,
+                        borderRadius: BorderRadius.circular(34),
+                      ),
+                      child: Center(
+                        child: HugeIcon(
+                          icon: icon,
+                          color: c.textSecondary,
+                          size: 20,
+                        ),
+                      ),
                     ),
-                  ),
+                    if (badge != null)
+                      Positioned(top: -4, right: -4, child: badge),
+                  ],
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -202,7 +118,8 @@ class StyleGuideHome extends StatelessWidget {
                       Text(
                         description,
                         style: GoogleFonts.montserrat(
-                          fontSize: 13,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
                           color: c.textDim,
                         ),
                       ),
@@ -219,6 +136,39 @@ class StyleGuideHome extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _BuzzBeeBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>?>(
+      stream: ConnectionService.myConnectionStream(),
+      builder: (context, snap) {
+        final data = snap.data?.data();
+        final myUid = ConnectionService.myUid;
+        final unseen =
+            ((data?['unseen'] as Map?)?[myUid] as num?)?.toInt() ?? 0;
+        if (unseen <= 0) return const SizedBox.shrink();
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+          decoration: BoxDecoration(
+            color: Colors.red,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            unseen > 99 ? '99+' : '$unseen',
+            style: GoogleFonts.montserrat(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+            ),
+          ),
+        );
+      },
     );
   }
 }

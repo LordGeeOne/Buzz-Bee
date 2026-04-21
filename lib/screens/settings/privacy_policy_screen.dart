@@ -56,7 +56,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                 children: [
                   const SizedBox(height: 8),
                   Text(
-                    'Nexaryo SG ("the App") is developed and maintained by Nexaryo. '
+                    'Buzz Bee ("the App") is developed and maintained by Nexaryo. '
                     'This Privacy Policy explains how we handle information when you use the App.\n\n'
                     'Data Collection\n\n'
                     'The App does not collect, store, or transmit any personal data to external servers. '

@@ -38,6 +38,17 @@ dependencies:
   shared_preferences: ^2.5.3
   hugeicons: ^1.1.6
   url_launcher: ^6.3.2
+  firebase_core: ^3.13.0
+  firebase_auth: ^5.5.4
+  firebase_messaging: ^15.2.5
+  google_sign_in: ^6.3.0
+  cloud_firestore: ^5.6.5
+  permission_handler: ^11.3.1
+  geolocator: ^13.0.2
+  firebase_storage: ^12.4.0
+  record: ^6.2.0
+  just_audio: ^0.9.40
+  path_provider: ^2.1.4
 
 dev_dependencies:
   flutter_test:
@@ -49,6 +60,16 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/buzz_icon.png"
+  remove_alpha_ios: true
+  min_sdk_android: 21
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "assets/icon/buzz_icon.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

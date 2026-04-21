@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../theme/nexaryo_colors.dart';
-import '../widgets/section_header.dart';
-import '../widgets/color_swatch_card.dart';
+import '../../theme/nexaryo_colors.dart';
+import '../../widgets/section_header.dart';
+import '../../widgets/color_swatch_card.dart';
 
 class ColorsSection extends StatelessWidget {
   const ColorsSection({super.key});

@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "544104570540",
+    "project_id": "buzz-buzz-2db72",
+    "storage_bucket": "buzz-buzz-2db72.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:544104570540:android:aaa4a7af96d98b88050909",
+        "android_client_info": {
+          "package_name": "com.nexaryo.buzz"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "544104570540-lc30i79qbop44shcc9vs1glci7ugshgf.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.nexaryo.buzz",
+            "certificate_hash": "bbcb86d71a07cba56d8550355314063ac58e9853"
+          }
+        },
+        {
+          "client_id": "544104570540-2t50g29gii3prarohf0pun7n1k0qqlqp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDv236a-Fco0oLuku1bLGgON_G-j8qO87k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "544104570540-2t50g29gii3prarohf0pun7n1k0qqlqp.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "544104570540-28u938ghhm06avk7e6fmbukvrmeuo8vr.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.nexaryoStyleGuide"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -59,7 +59,7 @@ class AboutScreen extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Nexaryo SG',
+                        'Buzz Bee',
                         style: TextStyle(
                           fontFamily: 'Miloner',
                           fontSize: 36,
@@ -69,7 +69,7 @@ class AboutScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Style Guide',
+                        "there's a buzz buzz buzz in the meadow",
                         style: GoogleFonts.montserrat(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
@@ -104,9 +104,8 @@ class AboutScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 32),
                       GestureDetector(
-                        onTap: () => launchUrl(
-                          Uri.parse('mailto:admin@nexaryo.co.za'),
-                        ),
+                        onTap: () =>
+                            launchUrl(Uri.parse('mailto:admin@nexaryo.co.za')),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [

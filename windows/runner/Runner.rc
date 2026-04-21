@@ -89,11 +89,11 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
+            VALUE "CompanyName", "Nexaryo" "\0"
             VALUE "FileDescription", "nexaryo_style_guide" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "nexaryo_style_guide" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Nexaryo. All rights reserved." "\0"
             VALUE "OriginalFilename", "nexaryo_style_guide.exe" "\0"
             VALUE "ProductName", "nexaryo_style_guide" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"

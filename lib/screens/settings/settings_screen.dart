@@ -4,6 +4,7 @@ import 'package:hugeicons/hugeicons.dart';
 import '../../theme/nexaryo_colors.dart';
 import '../splash_screen.dart';
 import 'about_screen.dart';
+import 'sign_out_screen.dart';
 import 'notes_screen.dart';
 import 'privacy_policy_screen.dart';
 import 'theme_colors_screen.dart';
@@ -128,6 +129,16 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 10),
+                  _NavTile(
+                    icon: HugeIcons.strokeRoundedLogout01,
+                    title: 'Sign Out',
+                    subtitle: 'Manage your account',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const SignOutScreen()),
+                    ),
+                  ),
                   const SizedBox(height: 24),
                   Text(
                     'ABOUT',
@@ -157,9 +168,7 @@ class SettingsScreen extends StatelessWidget {
                     subtitle: 'App info & contact',
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const AboutScreen(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const AboutScreen()),
                     ),
                   ),
                   const SizedBox(height: 40),

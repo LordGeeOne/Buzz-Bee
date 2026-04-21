@@ -8,7 +8,7 @@
 PRODUCT_NAME = nexaryo_style_guide
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.nexaryoStyleGuide
+PRODUCT_BUNDLE_IDENTIFIER = com.nexaryo.buzz
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 Nexaryo. All rights reserved.

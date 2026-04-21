@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
-import '../theme/nexaryo_colors.dart';
-import '../providers/settings_provider.dart';
-import '../widgets/section_header.dart';
+import '../../theme/nexaryo_colors.dart';
+import '../../providers/settings_provider.dart';
+import '../../widgets/section_header.dart';
 
 class PatternsSection extends StatelessWidget {
   const PatternsSection({super.key});

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../theme/app_text_styles.dart';
-import '../widgets/section_header.dart';
-import '../widgets/style_sample.dart';
+import '../../theme/app_text_styles.dart';
+import '../../widgets/section_header.dart';
+import '../../widgets/style_sample.dart';
 
 class TypographySection extends StatelessWidget {
   const TypographySection({super.key});

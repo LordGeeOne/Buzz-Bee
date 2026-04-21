@@ -1,22 +1,16 @@
 import 'dart:ui';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../services/connection_service.dart';
 import '../theme/nexaryo_colors.dart';
 import '../widgets/blob_background.dart';
+import 'chat_screen.dart';
 import 'settings/settings_screen.dart';
-import 'style_guide_home.dart';
-import 'colors_section.dart';
-import 'typography_section.dart';
-import 'icons_section.dart';
-import 'buttons_section.dart';
-import 'cards_section.dart';
-import 'inputs_section.dart';
-import 'spacing_section.dart';
-import 'file_structure_section.dart';
-import 'naming_conventions_section.dart';
-import 'patterns_section.dart';
+import 'people_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,23 +19,22 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
 
+  bool _locationGranted = false;
+  bool _notificationsGranted = false;
+  bool _imagesUploaded = false;
+
   static const _sections = [
-    _Section('Nexaryo SG', null),
-    _Section('Colors', null),
-    _Section('Typography', null),
-    _Section('Icons', null),
-    _Section('Buttons', null),
-    _Section('Cards', null),
-    _Section('Inputs', null),
-    _Section('Spacing', null),
-    _Section('File Structure', null),
-    _Section('Naming', null),
-    _Section('Patterns', null),
+    _Section('Home', null),
+    _Section('Buzz Bee', null),
+    _Section('Buzz Pic', null),
+    _Section('Buzz Word', null),
+    _Section('Buzz Voice', null),
   ];
 
   // Back panel top content is roughly 120px (safe area + app name + subtitle).
@@ -51,21 +44,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
   static const double _initialSheet = 0.5;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshChecklist();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sheetController.dispose();
     super.dispose();
   }
 
-  void _navigate(int index) {
-    setState(() => _currentIndex = index);
-    // Snap front panel up when entering a section
-    if (index != 0 && _sheetController.isAttached) {
-      _sheetController.animateTo(
-        _maxSheet,
-        duration: const Duration(milliseconds: 350),
-        curve: Curves.easeOut,
-      );
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshChecklist();
     }
+  }
+
+  Future<void> _refreshChecklist() async {
+    final loc = await Permission.locationWhenInUse.status;
+    final notif = await Permission.notification.status;
+    if (!mounted) return;
+    setState(() {
+      _locationGranted = loc.isGranted || loc.isLimited;
+      _notificationsGranted = notif.isGranted;
+    });
+  }
+
+  Future<void> _requestLocation() async {
+    final status = await Permission.locationWhenInUse.request();
+    if (!mounted) return;
+    if (status.isPermanentlyDenied) {
+      await openAppSettings();
+    }
+    _refreshChecklist();
+  }
+
+  Future<void> _requestNotifications() async {
+    final status = await Permission.notification.request();
+    if (!mounted) return;
+    if (status.isPermanentlyDenied) {
+      await openAppSettings();
+    }
+    _refreshChecklist();
+  }
+
+  void _uploadImages() {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Image upload coming soon')));
   }
 
   void _navigateHome() {
@@ -211,33 +241,167 @@ class _DashboardScreenState extends State<DashboardScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Nexaryo',
+                  'Buzz Bee',
                   style: TextStyle(
                     fontFamily: 'Miloner',
                     fontSize: 28,
                     fontWeight: FontWeight.w700,
-                    color: c.textPrimary,
+                    color: Colors.white,
                   ),
                 ),
-                Container(
-                  height: 68,
-                  width: 68,
-                  decoration: BoxDecoration(
-                    color: c.card,
-                    borderRadius: BorderRadius.circular(34),
-                  ),
-                  child: IconButton(
-                    icon: HugeIcon(
-                      icon: HugeIcons.strokeRoundedSettings01,
-                      color: c.textDim,
-                      size: 24,
+                Row(
+                  children: [
+                    Container(
+                      height: 68,
+                      width: 68,
+                      decoration: BoxDecoration(
+                        color: c.card,
+                        borderRadius: BorderRadius.circular(34),
+                      ),
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned.fill(
+                            child: IconButton(
+                              icon: HugeIcon(
+                                icon: HugeIcons.strokeRoundedUserGroup,
+                                color: c.textDim,
+                                size: 24,
+                              ),
+                              iconSize: 24,
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const PeopleScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          Positioned(
+                            top: 18,
+                            right: 18,
+                            child: IgnorePointer(
+                              child: StreamBuilder<int>(
+                                stream:
+                                    ConnectionService.pendingRequestsCountStream(),
+                                builder: (context, snap) {
+                                  if ((snap.data ?? 0) == 0) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Container(
+                                    width: 10,
+                                    height: 10,
+                                    decoration: BoxDecoration(
+                                      color: Colors.red,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: c.card,
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    iconSize: 24,
-                    onPressed: () {
+                    const SizedBox(width: 4),
+                    Container(
+                      height: 68,
+                      width: 68,
+                      decoration: BoxDecoration(
+                        color: c.card,
+                        borderRadius: BorderRadius.circular(34),
+                      ),
+                      child: IconButton(
+                        icon: HugeIcon(
+                          icon: HugeIcons.strokeRoundedSettings01,
+                          color: c.textDim,
+                          size: 24,
+                        ),
+                        iconSize: 24,
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const SettingsScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'You are single and searching',
+              style: GoogleFonts.montserrat(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: Colors.white.withValues(alpha: 0.85),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Text(
+                  'Your rating',
+                  style: GoogleFonts.montserrat(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white.withValues(alpha: 0.6),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                ...List.generate(5, (i) {
+                  const rating = 4; // placeholder rating out of 5
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 2),
+                    child: HugeIcon(
+                      icon: i < rating
+                          ? HugeIcons.strokeRoundedStar
+                          : HugeIcons.strokeRoundedStar,
+                      color: i < rating
+                          ? c.accentWarm
+                          : Colors.white.withValues(alpha: 0.25),
+                      size: 18,
+                    ),
+                  );
+                }),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: _BackPanelButton(
+                    label: 'Start searching',
+                    icon: HugeIcons.strokeRoundedSearch01,
+                    filled: true,
+                    onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => const SettingsScreen(),
+                        MaterialPageRoute(builder: (_) => const PeopleScreen()),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _BackPanelButton(
+                    label: 'Get verified',
+                    icon: HugeIcons.strokeRoundedCheckmarkBadge01,
+                    filled: false,
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Verification coming soon'),
                         ),
                       );
                     },
@@ -245,14 +409,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 22),
             Text(
-              'Style Guide',
+              'GET STARTED',
               style: GoogleFonts.montserrat(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: c.textDim,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.4,
+                color: Colors.white.withValues(alpha: 0.55),
               ),
+            ),
+            const SizedBox(height: 10),
+            if (!_locationGranted)
+              _ChecklistItem(
+                label: 'Allow location services',
+                checked: false,
+                onTap: _requestLocation,
+              ),
+            if (!_notificationsGranted)
+              _ChecklistItem(
+                label: 'Turn on notifications',
+                checked: false,
+                onTap: _requestNotifications,
+              ),
+            _ChecklistItem(
+              label: 'Upload your images',
+              checked: _imagesUploaded,
+              onTap: _uploadImages,
             ),
           ],
         ),
@@ -264,30 +447,206 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildCurrentPage() {
     switch (_currentIndex) {
       case 0:
-        return StyleGuideHome(onNavigate: _navigate);
-      case 1:
-        return const ColorsSection();
-      case 2:
-        return const TypographySection();
-      case 3:
-        return const IconsSection();
-      case 4:
-        return const ButtonsSection();
-      case 5:
-        return const CardsSection();
-      case 6:
-        return InputsSection();
-      case 7:
-        return const SpacingSection();
-      case 8:
-        return const FileStructureSection();
-      case 9:
-        return const NamingConventionsSection();
-      case 10:
-        return const PatternsSection();
+        return _ContactsList(onOpenChat: _openChat);
       default:
         return const SizedBox.shrink();
     }
+  }
+
+  void _openChat(String partnerUid) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ChatScreen(partnerUid: partnerUid)),
+    );
+  }
+}
+
+class _ContactsList extends StatefulWidget {
+  final ValueChanged<String> onOpenChat;
+
+  const _ContactsList({required this.onOpenChat});
+
+  @override
+  State<_ContactsList> createState() => _ContactsListState();
+}
+
+class _ContactsListState extends State<_ContactsList> {
+  late final Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _stream;
+
+  @override
+  void initState() {
+    super.initState();
+    _stream = ConnectionService.myConnectionsStream();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final myUid = ConnectionService.myUid;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+        stream: _stream,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const SizedBox(
+              height: 120,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          final docs = snap.data ?? const [];
+          if (docs.isEmpty || myUid == null) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  HugeIcon(
+                    icon: HugeIcons.strokeRoundedUserGroup,
+                    color: c.textDim,
+                    size: 40,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'No connections yet',
+                    style: GoogleFonts.montserrat(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: c.textDim,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          final partnerUids = <String>[];
+          for (final d in docs) {
+            final users = ((d.data()['users'] as List?) ?? const [])
+                .cast<String>();
+            final partner = users.firstWhere(
+              (u) => u != myUid,
+              orElse: () => '',
+            );
+            if (partner.isNotEmpty) partnerUids.add(partner);
+          }
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final uid in partnerUids)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _ContactTile(
+                    uid: uid,
+                    onTap: () => widget.onOpenChat(uid),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ContactTile extends StatefulWidget {
+  final String uid;
+  final VoidCallback onTap;
+
+  const _ContactTile({required this.uid, required this.onTap});
+
+  @override
+  State<_ContactTile> createState() => _ContactTileState();
+}
+
+class _ContactTileState extends State<_ContactTile> {
+  late final Future<DocumentSnapshot<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.uid)
+        .get();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: _future,
+      builder: (context, snap) {
+        final data = snap.data?.data() ?? const <String, dynamic>{};
+        final name = (data['name'] as String?)?.trim().isNotEmpty == true
+            ? data['name'] as String
+            : 'User';
+        final username = (data['username'] as String?) ?? '';
+        final photo = (data['photoURL'] as String?) ?? '';
+        return Material(
+          color: c.card,
+          borderRadius: BorderRadius.circular(34),
+          child: InkWell(
+            onTap: widget.onTap,
+            borderRadius: BorderRadius.circular(34),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(34),
+                border: Border.all(color: c.cardBorder),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 24,
+                    backgroundColor: c.cardBorder,
+                    backgroundImage: photo.isNotEmpty
+                        ? NetworkImage(photo)
+                        : null,
+                    child: photo.isEmpty
+                        ? HugeIcon(
+                            icon: HugeIcons.strokeRoundedUser,
+                            color: c.textDim,
+                            size: 22,
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          style: GoogleFonts.montserrat(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: c.textPrimary,
+                          ),
+                        ),
+                        if (username.isNotEmpty)
+                          Text(
+                            '@$username',
+                            style: GoogleFonts.montserrat(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: c.textDim,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  HugeIcon(
+                    icon: HugeIcons.strokeRoundedArrowRight01,
+                    color: c.textDim,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
 
@@ -295,4 +654,127 @@ class _Section {
   final String title;
   final dynamic icon;
   const _Section(this.title, this.icon);
+}
+
+class _BackPanelButton extends StatelessWidget {
+  final String label;
+  final List<List<dynamic>> icon;
+  final bool filled;
+  final VoidCallback onTap;
+
+  const _BackPanelButton({
+    required this.label,
+    required this.icon,
+    required this.filled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final bg = filled ? c.primary : Colors.white.withValues(alpha: 0.08);
+    final fg = filled ? Colors.white : Colors.white;
+    final border = filled
+        ? Colors.transparent
+        : Colors.white.withValues(alpha: 0.22);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(34),
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(34),
+            border: Border.all(color: border),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              HugeIcon(icon: icon, color: fg, size: 20),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.montserrat(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: fg,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChecklistItem extends StatelessWidget {
+  final String label;
+  final bool checked;
+  final VoidCallback onTap;
+
+  const _ChecklistItem({
+    required this.label,
+    required this.checked,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: checked ? null : onTap,
+          borderRadius: BorderRadius.circular(24),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Container(
+                  width: 22,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: checked ? c.primary : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: checked
+                          ? c.primary
+                          : Colors.white.withValues(alpha: 0.4),
+                      width: 1.6,
+                    ),
+                  ),
+                  child: checked
+                      ? const Icon(Icons.check, size: 16, color: Colors.white)
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: checked
+                          ? Colors.white.withValues(alpha: 0.45)
+                          : Colors.white.withValues(alpha: 0.9),
+                      decoration: checked ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

@@ -3,8 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../theme/nexaryo_colors.dart';
 
 class ThemeProvider extends ChangeNotifier {
-  String _activeId = 'nexaryo';
-  bool _isDark = true;
+  String _activeId = 'ember';
+  bool _isDark = false;
 
   String get activeId => _activeId;
   bool get isDark => _isDark;
@@ -33,11 +33,11 @@ class ThemeProvider extends ChangeNotifier {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    final storedId = prefs.getString('theme_active_id') ?? 'nexaryo';
+    final storedId = prefs.getString('theme_active_id') ?? 'ember';
     _activeId = NexaryoColors.palettes.any((p) => p.id == storedId)
         ? storedId
-        : 'nexaryo';
-    _isDark = prefs.getBool('theme_is_dark') ?? true;
+        : 'ember';
+    _isDark = prefs.getBool('theme_is_dark') ?? false;
     notifyListeners();
   }
 

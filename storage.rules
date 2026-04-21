@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Voice messages are scoped to a connection. Both participants must
+    // be in the connection's `users` array (mirrors the Firestore rule).
+    match /voice/{connectionId}/{file} {
+      function isParticipant() {
+        return request.auth != null
+          && firestore.exists(
+               /databases/(default)/documents/connections/$(connectionId)
+             )
+          && request.auth.uid in firestore.get(
+               /databases/(default)/documents/connections/$(connectionId)
+             ).data.users;
+      }
+
+      allow read: if isParticipant();
+      allow write: if isParticipant()
+                   && request.resource.size < 1 * 1024 * 1024
+                   && request.resource.contentType.matches('audio/.*');
+    }
+  }
+}

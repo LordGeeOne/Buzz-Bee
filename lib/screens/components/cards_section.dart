@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
-import '../theme/nexaryo_colors.dart';
-import '../theme/app_text_styles.dart';
-import '../widgets/section_header.dart';
+import '../../theme/nexaryo_colors.dart';
+import '../../theme/app_text_styles.dart';
+import '../../widgets/section_header.dart';
 
 class CardsSection extends StatelessWidget {
   const CardsSection({super.key});
