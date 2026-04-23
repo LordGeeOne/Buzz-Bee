@@ -10,7 +10,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:just_audio/just_audio.dart';
 
-import '../services/buzz_notifier.dart';
 import '../services/connection_service.dart';
 import '../services/presence_service.dart';
 import '../services/voice_player_registry.dart';
@@ -78,7 +77,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    BuzzNotifier.instance.setBuzzScreenForeground(true);
     _inputFocus.addListener(_onFocusChange);
     _textController.addListener(_onTextChanged);
     _bootstrap();
@@ -126,7 +124,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    BuzzNotifier.instance.setBuzzScreenForeground(false);
     final connId = _connectionId;
     if (connId != null && connId.isNotEmpty) {
       unawaited(ConnectionService.setViewing(connId, false));
@@ -179,15 +176,29 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (data == null) continue;
       if (data['fromUid'] == myUid) continue;
       final type = data['type'] as String? ?? 'text';
-      // Buzz vibrations are handled by BuzzNotifier with count semantics.
-      if (type != 'text' && type != 'voice') continue;
       final ts = data['timestamp'];
       if (ts is Timestamp &&
           subscribedAt != null &&
           ts.toDate().isBefore(subscribedAt)) {
         continue;
       }
-      HapticFeedback.mediumImpact();
+      if (type == 'buzz') {
+        // Vibrate once per buzz tap, capped at 5 pulses.
+        final count = ((data['count'] as num?) ?? 1).toInt();
+        unawaited(_vibrateBuzz(count));
+      } else if (type == 'text' || type == 'voice') {
+        HapticFeedback.mediumImpact();
+      }
+    }
+  }
+
+  Future<void> _vibrateBuzz(int count) async {
+    final pulses = count > 10 ? 5 : count.clamp(1, 10);
+    for (var i = 0; i < pulses; i++) {
+      HapticFeedback.vibrate();
+      if (i < pulses - 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
     }
   }
 

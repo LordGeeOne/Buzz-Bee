@@ -43,18 +43,29 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
-        final displayName = user.displayName ?? '';
         try {
-          await FirebaseFirestore.instance
+          final userRef = FirebaseFirestore.instance
               .collection('users')
-              .doc(user.uid)
-              .set({
-                'name': displayName,
-                'nameLower': displayName.toLowerCase(),
-                'email': user.email ?? '',
-                'photoURL': user.photoURL ?? '',
-                'lastLogin': FieldValue.serverTimestamp(),
-              }, SetOptions(merge: true));
+              .doc(user.uid);
+          final existing = await userRef.get();
+          final existingData = existing.data() ?? const <String, dynamic>{};
+          final existingName = (existingData['name'] as String?)?.trim() ?? '';
+          final googleName = user.displayName ?? '';
+          // Preserve onboarding-set name; only seed name/nameLower if the
+          // user doc has no name yet (first-time sign-in).
+          final nameToWrite = existingName.isNotEmpty
+              ? existingName
+              : googleName;
+          final update = <String, dynamic>{
+            'email': user.email ?? '',
+            'photoURL': user.photoURL ?? '',
+            'lastLogin': FieldValue.serverTimestamp(),
+          };
+          if (existingName.isEmpty && nameToWrite.isNotEmpty) {
+            update['name'] = nameToWrite;
+            update['nameLower'] = nameToWrite.toLowerCase();
+          }
+          await userRef.set(update, SetOptions(merge: true));
         } catch (e) {
           debugPrint('Firestore write failed: $e');
         }
@@ -64,7 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
         await widget.onSignedIn!();
       }
     } catch (e) {
-      setState(() => _error = 'Sign-in failed. Please try again.');
+      setState(() => _error = "Couldn't sign you in. Give it another try.");
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -111,7 +122,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'Login',
+                    'Welcome',
                     style: GoogleFonts.montserrat(
                       fontSize: 20,
                       fontWeight: FontWeight.w600,
@@ -158,9 +169,9 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 24),
         Text(
-          'Sign In',
+          'Hey there',
           style: TextStyle(
-            fontFamily: 'Miloner',
+            fontFamily: 'Beli',
             fontSize: 28,
             fontWeight: FontWeight.w600,
             color: c.textPrimary,
@@ -168,7 +179,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Sign in with your Google account',
+          'Sign in to start meeting people',
           style: GoogleFonts.montserrat(fontSize: 14, color: c.textDim),
         ),
         const SizedBox(height: 24),

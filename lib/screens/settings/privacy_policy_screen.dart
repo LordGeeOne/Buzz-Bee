@@ -100,7 +100,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
                         Text(
                           'NEXARYO',
                           style: TextStyle(
-                            fontFamily: 'Miloner',
+                            fontFamily: 'Beli',
                             fontSize: 18,
                             letterSpacing: 3,
                             color: c.textSecondary,

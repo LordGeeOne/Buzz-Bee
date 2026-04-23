@@ -38,10 +38,16 @@ service cloud.firestore {
       match /requests/{requestId} {
         // Owner can read their own requests
         allow read: if request.auth != null && request.auth.uid == userId;
-        // Any signed-in user can send a request (create)
-        allow create: if request.auth != null;
-        // Owner can delete their own requests (accept/reject)
-        allow delete: if request.auth != null && request.auth.uid == userId;
+        // Any signed-in user can send a request, but only as themselves
+        // (requestId must equal their uid, and fromUid must match).
+        allow create, update: if request.auth != null
+                              && request.auth.uid == requestId
+                              && request.resource.data.fromUid == request.auth.uid;
+        // Owner can delete their own requests (accept/reject).
+        // Sender can also delete their own pending request (cancel/unlike).
+        allow delete: if request.auth != null
+                      && (request.auth.uid == userId
+                          || request.auth.uid == requestId);
       }
 
       match /notifications/{notificationId} {

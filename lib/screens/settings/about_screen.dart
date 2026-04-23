@@ -61,7 +61,7 @@ class AboutScreen extends StatelessWidget {
                       Text(
                         'Buzz Bee',
                         style: TextStyle(
-                          fontFamily: 'Miloner',
+                          fontFamily: 'Beli',
                           fontSize: 36,
                           fontWeight: FontWeight.w600,
                           color: c.textPrimary,
@@ -96,7 +96,7 @@ class AboutScreen extends StatelessWidget {
                       Text(
                         'NEXARYO',
                         style: TextStyle(
-                          fontFamily: 'Miloner',
+                          fontFamily: 'Beli',
                           fontSize: 22,
                           letterSpacing: 3,
                           color: c.textPrimary,

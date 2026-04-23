@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
 import 'providers/settings_provider.dart';
 import 'providers/theme_provider.dart';
-import 'services/buzz_notifier.dart';
 import 'services/fcm_service.dart';
 import 'services/presence_service.dart';
 import 'theme/nexaryo_colors.dart';
@@ -23,7 +22,6 @@ void main() async {
   final settings = SettingsProvider();
   final themeProvider = ThemeProvider();
   await Future.wait([settings.load(), themeProvider.load()]);
-  BuzzNotifier.instance.start();
   await FcmService.instance.start();
   if (FirebaseAuth.instance.currentUser != null) {
     PresenceService.instance.start();
@@ -160,7 +158,16 @@ class _SplashEntry extends StatelessWidget {
           .collection('users')
           .doc(user.uid)
           .get();
-      final complete = doc.data()?['onboardingComplete'] == true;
+      final data = doc.data();
+      if (data == null) return false;
+      // Treat any of these as proof of completed onboarding so a missing/
+      // stale `onboardingComplete` flag doesn't force returning users back
+      // through onboarding after a reinstall.
+      final flag = data['onboardingComplete'] == true;
+      final username = (data['username'] as String?)?.trim();
+      final dob = data['dob'];
+      final complete =
+          flag || (username != null && username.isNotEmpty) || dob != null;
       if (complete) {
         await prefs.setBool('onboarding_complete', true);
       }

@@ -1,7 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../services/connection_service.dart';
@@ -14,604 +14,720 @@ class PeopleScreen extends StatefulWidget {
   State<PeopleScreen> createState() => _PeopleScreenState();
 }
 
-class _PeopleScreenState extends State<PeopleScreen> {
-  final _searchController = TextEditingController();
-  List<Map<String, dynamic>> _searchResults = [];
-  bool _hasSearched = false;
-  bool _isSearching = false;
+class _PeopleScreenState extends State<PeopleScreen>
+    with TickerProviderStateMixin {
+  // Deck
+  List<Map<String, dynamic>> _deck = [];
+  bool _loadingDeck = true;
+
+  // UIDs of people who already sent me a request (a like from them).
+  // A like from me to one of these will accept (forming a connection).
+  Set<String> _incomingLikes = <String>{};
+
+  // Drag state
+  Offset _drag = Offset.zero;
+  bool _animatingOut = false;
+
+  late final AnimationController _swipeCtrl;
+  Animation<Offset> _swipeAnim = const AlwaysStoppedAnimation(Offset.zero);
+
+  late final AnimationController _resetCtrl;
+  Animation<Offset> _resetAnim = const AlwaysStoppedAnimation(Offset.zero);
 
   String get _myUid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
-  Future<void> _searchUsers() async {
-    final query = _searchController.text.trim();
-    if (query.isEmpty) return;
+  @override
+  void initState() {
+    super.initState();
+    _swipeCtrl =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 260),
+        )..addStatusListener((s) {
+          if (s == AnimationStatus.completed) _onSwipeAnimationComplete();
+        });
 
-    setState(() {
-      _isSearching = true;
-      _hasSearched = true;
-    });
+    _resetCtrl =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 220),
+        )..addListener(() {
+          setState(() => _drag = _resetAnim.value);
+        });
 
+    _loadDeck();
+  }
+
+  @override
+  void dispose() {
+    _swipeCtrl.dispose();
+    _resetCtrl.dispose();
+    super.dispose();
+  }
+
+  // ---------------- Data ----------------
+
+  Future<void> _loadDeck() async {
+    setState(() => _loadingDeck = true);
     try {
-      final lowerQuery = query.toLowerCase();
-
-      // Search by name prefix
-      final nameQuery = FirebaseFirestore.instance
+      // 1) Pull incoming requests (people who already liked me).
+      final reqSnap = await FirebaseFirestore.instance
           .collection('users')
-          .where('nameLower', isGreaterThanOrEqualTo: lowerQuery)
-          .where('nameLower', isLessThanOrEqualTo: '$lowerQuery\uf8ff')
-          .limit(20)
+          .doc(_myUid)
+          .collection('requests')
           .get();
+      final incomingUids = reqSnap.docs.map((d) => d.id).toSet();
 
-      // Search by exact username
-      final usernameQuery = FirebaseFirestore.instance
-          .collection('users')
-          .where('username', isEqualTo: lowerQuery)
-          .limit(5)
+      // 2) Pull existing connections so we can hide already-connected users.
+      final connSnap = await FirebaseFirestore.instance
+          .collection('connections')
+          .where('users', arrayContains: _myUid)
           .get();
-
-      final results = await Future.wait([nameQuery, usernameQuery]);
-
-      final seen = <String>{};
-      final merged = <Map<String, dynamic>>[];
-      for (final snapshot in results) {
-        for (final doc in snapshot.docs) {
-          if (doc.id != _myUid && seen.add(doc.id)) {
-            merged.add({'uid': doc.id, ...doc.data()});
-          }
+      final connectedUids = <String>{};
+      for (final d in connSnap.docs) {
+        final users = ((d.data()['users'] as List?) ?? const []).cast<String>();
+        for (final u in users) {
+          if (u != _myUid) connectedUids.add(u);
         }
       }
 
-      setState(() => _searchResults = merged);
+      // 3) Pull a batch of users.
+      final usersSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .limit(60)
+          .get();
+
+      final priority = <Map<String, dynamic>>[];
+      final rest = <Map<String, dynamic>>[];
+      for (final d in usersSnap.docs) {
+        if (d.id == _myUid) continue;
+        if (connectedUids.contains(d.id)) continue;
+        final entry = {'uid': d.id, ...d.data()};
+        if (incomingUids.contains(d.id)) {
+          priority.add(entry);
+        } else {
+          rest.add(entry);
+        }
+      }
+
+      // 4) Hydrate any incoming-request senders missing from the user batch.
+      final present = {for (final u in priority) u['uid'] as String};
+      final missing = incomingUids
+          .difference(present)
+          .difference(connectedUids)
+          .difference({_myUid});
+      for (final uid in missing) {
+        try {
+          final u = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(uid)
+              .get();
+          if (u.exists) {
+            priority.add({'uid': uid, ...?u.data()});
+          }
+        } catch (_) {}
+      }
+
+      rest.shuffle();
+      if (!mounted) return;
+      setState(() {
+        _incomingLikes = incomingUids;
+        _deck = [...priority, ...rest];
+        _loadingDeck = false;
+      });
     } catch (_) {
-      setState(() => _searchResults = []);
-    } finally {
-      setState(() => _isSearching = false);
-    }
-  }
-
-  Future<bool> _isAlreadyConnected() async {
-    if (_myUid.isEmpty) return false;
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(_myUid)
-        .get();
-    final connId = (doc.data()?['connectionId'] as String?) ?? '';
-    return connId.isNotEmpty;
-  }
-
-  Future<void> _sendRequest(String toUid) async {
-    if (await _isAlreadyConnected()) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "You're already connected. Disconnect first to send a new request.",
-            style: GoogleFonts.montserrat(),
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
+      setState(() => _loadingDeck = false);
     }
+  }
+
+  /// A right swipe / tap on the heart. If this person already liked me,
+  /// accept the request (forming a connection). Otherwise send a like.
+  Future<void> _likeUser(String otherUid) async {
+    final isMutual = _incomingLikes.contains(otherUid);
     try {
-      await ConnectionService.sendRequest(toUid);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Request sent!', style: GoogleFonts.montserrat()),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-        ),
-      );
+      if (isMutual) {
+        await ConnectionService.acceptRequest(otherUid);
+        if (!mounted) return;
+        _toast("It's a match! ✨");
+      } else {
+        await ConnectionService.sendRequest(otherUid);
+        if (!mounted) return;
+        _toast('Like sent');
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed: $e', style: GoogleFonts.montserrat())),
-      );
+      final msg = e is StateError ? e.message : 'Something went wrong';
+      _toast(msg);
     }
   }
 
-  Future<void> _acceptRequest(String fromUid) async {
-    try {
-      await ConnectionService.acceptRequest(fromUid);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Connected!', style: GoogleFonts.montserrat()),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            e is StateError ? e.message : 'Failed: $e',
-            style: GoogleFonts.montserrat(),
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  Future<void> _rejectRequest(String fromUid) async {
-    await ConnectionService.rejectRequest(fromUid);
-    if (!mounted) return;
+  void _toast(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Request rejected', style: GoogleFonts.montserrat()),
+        content: Text(msg, style: GoogleFonts.montserrat()),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     );
   }
 
-  void _showUserPopup(Map<String, dynamic> user, {bool isRequest = false}) {
-    final c = context.colors;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: c.card,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(34)),
-      ),
-      builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: c.cardBorder,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 20),
-              if (isRequest) ...[
-                _buildUserInfo(c, user),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _actionButton(
-                        c,
-                        label: 'Accept',
-                        color: c.primary,
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _acceptRequest(user['uid']);
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _actionButton(
-                        c,
-                        label: 'Reject',
-                        color: c.accentWarm,
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _rejectRequest(user['uid']);
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _actionButton(
-                  c,
-                  label: 'View Details',
-                  color: c.textSecondary,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showDetailsPopup(user);
-                  },
-                ),
-              ] else ...[
-                _buildUserInfo(c, user),
-                const SizedBox(height: 24),
-                _actionButton(
-                  c,
-                  label: 'Send Request',
-                  color: c.primary,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _sendRequest(user['uid']);
-                  },
-                ),
-                const SizedBox(height: 12),
-                _actionButton(
-                  c,
-                  label: 'View Details',
-                  color: c.textSecondary,
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _showDetailsPopup(user);
-                  },
-                ),
-              ],
-              const SizedBox(height: 16),
-            ],
-          ),
-        );
-      },
-    );
+  // ---------------- Swipe ----------------
+
+  void _onPanUpdate(DragUpdateDetails d) {
+    if (_animatingOut) return;
+    setState(() => _drag += d.delta);
   }
 
-  void _showDetailsPopup(Map<String, dynamic> user) {
-    final c = context.colors;
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return Dialog(
-          backgroundColor: c.card,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(34),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _avatar(user, radius: 40),
-                const SizedBox(height: 16),
-                Text(
-                  user['name'] ?? 'User',
-                  style: TextStyle(
-                    fontFamily: 'Miloner',
-                    fontSize: 22,
-                    fontWeight: FontWeight.w600,
-                    color: c.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                if (user['username'] != null &&
-                    (user['username'] as String).isNotEmpty)
-                  Text(
-                    '@${user['username']}',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 14,
-                      color: c.textDim,
-                    ),
-                  ),
-                if (user['email'] != null &&
-                    (user['email'] as String).isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    user['email'],
-                    style: GoogleFonts.montserrat(
-                      fontSize: 13,
-                      color: c.textDim,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: _actionButton(
-                    c,
-                    label: 'Close',
-                    color: c.textSecondary,
-                    onTap: () => Navigator.pop(ctx),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildUserInfo(NexaryoColors c, Map<String, dynamic> user) {
-    return Column(
-      children: [
-        _avatar(user, radius: 32),
-        const SizedBox(height: 12),
-        Text(
-          user['name'] ?? 'User',
-          style: GoogleFonts.montserrat(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: c.textPrimary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _avatar(Map<String, dynamic> user, {double radius = 20}) {
-    final c = context.colors;
-    final photo = user['photoURL'] ?? user['fromPhoto'] ?? '';
-    if (photo.isNotEmpty) {
-      return CircleAvatar(radius: radius, backgroundImage: NetworkImage(photo));
+  void _onPanEnd(DragEndDetails d) {
+    if (_animatingOut) return;
+    final w = MediaQuery.of(context).size.width;
+    final threshold = w * 0.28;
+    final vx = d.velocity.pixelsPerSecond.dx;
+    if (_drag.dx > threshold || vx > 800) {
+      _flyOut(true);
+    } else if (_drag.dx < -threshold || vx < -800) {
+      _flyOut(false);
+    } else {
+      _resetAnim = Tween<Offset>(
+        begin: _drag,
+        end: Offset.zero,
+      ).animate(CurvedAnimation(parent: _resetCtrl, curve: Curves.easeOutBack));
+      _resetCtrl
+        ..reset()
+        ..forward();
     }
-    return CircleAvatar(
-      radius: radius,
-      backgroundColor: c.cardBorder,
-      child: HugeIcon(
-        icon: HugeIcons.strokeRoundedUser,
-        color: c.textSecondary,
-        size: radius * 0.9,
-      ),
-    );
   }
 
-  Widget _actionButton(
-    NexaryoColors c, {
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: c.card,
-      borderRadius: BorderRadius.circular(34),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(34),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(34),
-            border: Border.all(color: color),
-          ),
-          child: Center(
-            child: Text(
-              label,
-              style: GoogleFonts.montserrat(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+  void _flyOut(bool right) {
+    if (_deck.isEmpty) return;
+    final w = MediaQuery.of(context).size.width;
+    final end = Offset(right ? w * 1.6 : -w * 1.6, _drag.dy + 60);
+    _swipeAnim = Tween<Offset>(begin: _drag, end: end).animate(
+      CurvedAnimation(parent: _swipeCtrl, curve: Curves.easeOut),
+    )..addListener(_onSwipeTick);
+    setState(() => _animatingOut = true);
+    if (right) _likeUser(_deck.first['uid']);
+    _swipeCtrl
+      ..reset()
+      ..forward();
   }
+
+  void _onSwipeTick() => setState(() => _drag = _swipeAnim.value);
+
+  void _onSwipeAnimationComplete() {
+    _swipeAnim.removeListener(_onSwipeTick);
+    setState(() {
+      if (_deck.isNotEmpty) _deck.removeAt(0);
+      _drag = Offset.zero;
+      _animatingOut = false;
+    });
+  }
+
+  void _buttonSwipe(bool right) {
+    if (_animatingOut || _deck.isEmpty) return;
+    _flyOut(right);
+  }
+
+  // ---------------- UI ----------------
 
   @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final topInset = MediaQuery.of(context).padding.top;
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    return Scaffold(
+      backgroundColor: c.background,
+      extendBodyBehindAppBar: true,
+      body: Stack(
+        children: [
+          // Full-bleed deck
+          Positioned.fill(child: _buildDeck(c)),
+          // Top gradient for status bar legibility
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Container(
+                height: topInset + 80,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0x99000000), Color(0x00000000)],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Top bar
+          Positioned(top: topInset, left: 0, right: 0, child: _buildTopBar(c)),
+          // Bottom action row
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: bottomInset,
+            child: _buildActionRow(c),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopBar(NexaryoColors c) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      child: Row(
+        children: [
+          _topBtn(
+            c,
+            icon: HugeIcons.strokeRoundedArrowLeft01,
+            onTap: () => Navigator.pop(context),
+          ),
+          const Spacer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _topBtn(
+    NexaryoColors c, {
+    required List<List<dynamic>> icon,
+    required VoidCallback onTap,
+  }) {
+    return SizedBox(
+      width: 68,
+      height: 68,
+      child: IconButton(
+        icon: HugeIcon(icon: icon, color: c.textDim, size: 24),
+        onPressed: onTap,
+      ),
+    );
+  }
+
+  // ---------------- Deck ----------------
+
+  Widget _buildDeck(NexaryoColors c) {
+    if (_loadingDeck) {
+      return Center(child: CircularProgressIndicator(color: c.primary));
+    }
+    if (_deck.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            HugeIcon(
+              icon: HugeIcons.strokeRoundedUserGroup,
+              color: c.cardBorder,
+              size: 56,
+            ),
+            const SizedBox(height: 14),
+            Text(
+              "That's everyone for now",
+              style: GoogleFonts.montserrat(
+                fontSize: 15,
+                color: c.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextButton(
+              onPressed: _loadDeck,
+              child: Text(
+                'Check again',
+                style: GoogleFonts.montserrat(
+                  color: c.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final visible = _deck.take(3).toList();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            for (int i = visible.length - 1; i >= 0; i--)
+              _buildCard(c, visible[i], i, constraints),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCard(
+    NexaryoColors c,
+    Map<String, dynamic> user,
+    int index,
+    BoxConstraints constraints,
+  ) {
+    final isTop = index == 0;
+    final width = constraints.maxWidth;
+    final progress = isTop ? (_drag.dx / (width * 0.6)).clamp(-1.0, 1.0) : 0.0;
+    final angle = isTop ? progress * 0.18 : 0.0;
+
+    final scale = isTop ? 1.0 : 1.0 - (index * 0.04);
+    final yOffset = isTop ? 0.0 : index * 12.0;
+
+    Widget card = _CardContent(user: user, swipeProgress: progress);
+
+    if (isTop) {
+      card = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanEnd,
+        child: Transform.translate(
+          offset: _drag,
+          child: Transform.rotate(angle: angle, child: card),
+        ),
+      );
+    } else {
+      card = IgnorePointer(
+        child: Transform.translate(
+          offset: Offset(0, yOffset),
+          child: Transform.scale(scale: scale, child: card),
+        ),
+      );
+    }
+
+    return Positioned.fill(child: card);
+  }
+
+  Widget _buildActionRow(NexaryoColors c) {
+    final disabled = _deck.isEmpty || _animatingOut;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _actionBtn(
+            c,
+            icon: HugeIcons.strokeRoundedCancel01,
+            color: c.accentWarm,
+            onTap: disabled ? null : () => _buttonSwipe(false),
+          ),
+          _actionBtn(
+            c,
+            icon: HugeIcons.strokeRoundedFavourite,
+            color: c.primary,
+            onTap: disabled ? null : () => _buttonSwipe(true),
+            big: true,
+          ),
+          _actionBtn(
+            c,
+            icon: HugeIcons.strokeRoundedRefresh,
+            color: c.textSecondary,
+            onTap: _loadingDeck ? null : _loadDeck,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionBtn(
+    NexaryoColors c, {
+    required List<List<dynamic>> icon,
+    required Color color,
+    required VoidCallback? onTap,
+    bool big = false,
+  }) {
+    final size = big ? 72.0 : 60.0;
+    final iconSize = big ? 30.0 : 24.0;
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 200),
+      opacity: onTap == null ? 0.4 : 1.0,
+      child: Material(
+        color: c.card,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: color, width: 1.5),
+            ),
+            child: Center(
+              child: HugeIcon(icon: icon, color: color, size: iconSize),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CardContent extends StatefulWidget {
+  const _CardContent({required this.user, required this.swipeProgress});
+
+  final Map<String, dynamic> user;
+  final double swipeProgress;
+
+  @override
+  State<_CardContent> createState() => _CardContentState();
+}
+
+class _CardContentState extends State<_CardContent> {
+  int _imgIndex = 0;
+
+  List<String> get _images {
+    final imgs = <String>[];
+    final gallery = widget.user['gallery'];
+    if (gallery is List) {
+      for (final g in gallery) {
+        if (g is String && g.isNotEmpty) imgs.add(g);
+      }
+    }
+    return imgs;
+  }
+
+  void _next() {
+    final imgs = _images;
+    if (imgs.length <= 1) return;
+    setState(() => _imgIndex = (_imgIndex + 1) % imgs.length);
+  }
+
+  void _prev() {
+    final imgs = _images;
+    if (imgs.length <= 1) return;
+    setState(() => _imgIndex = (_imgIndex - 1 + imgs.length) % imgs.length);
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    final user = widget.user;
+    final swipeProgress = widget.swipeProgress;
+    final images = _images;
+    final currentPhoto = images.isNotEmpty ? images[_imgIndex] : '';
+    final name = (user['name'] as String?) ?? 'User';
+    final username = (user['username'] as String?) ?? '';
+    final bio = (user['bio'] as String?) ?? '';
+    final age = _calcAge(user['dob']);
 
-    return Scaffold(
-      backgroundColor: c.background,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // App bar
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    final likeOpacity = swipeProgress.clamp(0.0, 1.0);
+    final passOpacity = (-swipeProgress).clamp(0.0, 1.0);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(color: c.card),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (currentPhoto.isNotEmpty)
+            Image.network(
+              currentPhoto,
+              key: ValueKey(currentPhoto),
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => _placeholder(c),
+            )
+          else
+            _placeholder(c),
+          // Pagination dots
+          if (images.length > 1)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 12,
+              left: 12,
+              right: 12,
               child: Row(
                 children: [
-                  Container(
-                    height: 68,
-                    width: 68,
-                    decoration: BoxDecoration(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(34),
-                    ),
-                    child: IconButton(
-                      icon: HugeIcon(
-                        icon: HugeIcons.strokeRoundedArrowLeft01,
-                        color: c.textDim,
-                        size: 24,
+                  for (int i = 0; i < images.length; i++)
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        height: 3,
+                        decoration: BoxDecoration(
+                          color: i == _imgIndex
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
-                      iconSize: 24,
-                      onPressed: () => Navigator.pop(context),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'People',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      color: c.textPrimary,
-                    ),
-                  ),
                 ],
               ),
             ),
-
-            // Search bar
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      style: GoogleFonts.montserrat(
-                        color: c.textPrimary,
-                        fontSize: 14,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'Search by name...',
-                        hintStyle: GoogleFonts.montserrat(
-                          color: c.textDim,
-                          fontSize: 14,
-                        ),
-                        filled: true,
-                        fillColor: c.card,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 16,
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(34),
-                          borderSide: BorderSide(color: c.cardBorder),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(34),
-                          borderSide: BorderSide(color: c.primary),
-                        ),
-                      ),
-                      onSubmitted: (_) => _searchUsers(),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Container(
-                    height: 52,
-                    width: 52,
-                    decoration: BoxDecoration(
-                      color: c.primary,
-                      borderRadius: BorderRadius.circular(26),
-                    ),
-                    child: IconButton(
-                      icon: HugeIcon(
-                        icon: HugeIcons.strokeRoundedSearch01,
-                        color: Colors.white,
-                        size: 22,
-                      ),
-                      onPressed: _searchUsers,
-                    ),
-                  ),
-                ],
+          const IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.transparent,
+                    Colors.transparent,
+                    Color(0xE6000000),
+                  ],
+                  stops: [0.0, 0.45, 1.0],
+                ),
               ),
             ),
-            const SizedBox(height: 16),
-
-            // Content
-            Expanded(
-              child: _hasSearched ? _buildSearchResults(c) : _buildRequests(c),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSearchResults(NexaryoColors c) {
-    if (_isSearching) {
-      return Center(child: CircularProgressIndicator(color: c.primary));
-    }
-    if (_searchResults.isEmpty) {
-      return Center(
-        child: Text(
-          'No users found',
-          style: GoogleFonts.montserrat(fontSize: 14, color: c.textDim),
-        ),
-      );
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      itemCount: _searchResults.length,
-      itemBuilder: (context, index) {
-        final user = _searchResults[index];
-        return _userTile(c, user, isRequest: false);
-      },
-    );
-  }
-
-  Widget _buildRequests(NexaryoColors c) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(_myUid)
-          .collection('requests')
-          .orderBy('timestamp', descending: true)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator(color: c.primary));
-        }
-        final docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return Center(
+          ),
+          Positioned(
+            left: 20,
+            right: 20,
+            bottom: 120,
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                HugeIcon(
-                  icon: HugeIcons.strokeRoundedUserGroup,
-                  color: c.cardBorder,
-                  size: 48,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'Beli',
+                          fontSize: 26,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    if (age != null) ...[
+                      const SizedBox(width: 8),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          '$age',
+                          style: GoogleFonts.montserrat(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.white.withValues(alpha: 0.85),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'No pending requests',
-                  style: GoogleFonts.montserrat(fontSize: 14, color: c.textDim),
-                ),
-              ],
-            ),
-          );
-        }
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          itemCount: docs.length,
-          itemBuilder: (context, index) {
-            final data = docs[index].data() as Map<String, dynamic>;
-            final user = {
-              'uid': docs[index].id,
-              'name': data['fromName'] ?? 'User',
-              'photoURL': data['fromPhoto'] ?? '',
-            };
-            return _userTile(c, user, isRequest: true);
-          },
-        );
-      },
-    );
-  }
-
-  Widget _userTile(
-    NexaryoColors c,
-    Map<String, dynamic> user, {
-    required bool isRequest,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Material(
-        color: c.card,
-        borderRadius: BorderRadius.circular(34),
-        child: InkWell(
-          onTap: () => _showUserPopup(user, isRequest: isRequest),
-          borderRadius: BorderRadius.circular(34),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(34),
-              border: Border.all(color: c.cardBorder),
-            ),
-            child: Row(
-              children: [
-                _avatar(user),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    user['name'] ?? 'User',
+                if (username.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '@$username',
                     style: GoogleFonts.montserrat(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: c.textPrimary,
+                      fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
+                ],
+                if (bio.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    bio,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.85),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Positioned(
+            top: 24,
+            left: 20,
+            child: Opacity(
+              opacity: likeOpacity,
+              child: _badge('LIKE', c.primary),
+            ),
+          ),
+          Positioned(
+            top: 24,
+            right: 20,
+            child: Opacity(
+              opacity: passOpacity,
+              child: _badge('PASS', c.accentWarm),
+            ),
+          ),
+          // Tap zones (topmost) for image navigation
+          Positioned.fill(
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _prev,
+                  ),
                 ),
-                HugeIcon(
-                  icon: HugeIcons.strokeRoundedArrowRight01,
-                  color: c.textDim,
-                  size: 20,
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _next,
+                  ),
                 ),
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _placeholder(NexaryoColors c) {
+    return Container(
+      color: c.surface,
+      child: Center(
+        child: HugeIcon(
+          icon: HugeIcons.strokeRoundedUser,
+          color: c.cardBorder,
+          size: 80,
         ),
       ),
     );
+  }
+
+  Widget _badge(String text, Color color) {
+    return Transform.rotate(
+      angle: -0.15,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(color: color, width: 3),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          text,
+          style: GoogleFonts.montserrat(
+            color: color,
+            fontWeight: FontWeight.w800,
+            fontSize: 22,
+            letterSpacing: 2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  int? _calcAge(dynamic dob) {
+    try {
+      DateTime? d;
+      if (dob is Timestamp) {
+        d = dob.toDate();
+      } else if (dob is String && dob.isNotEmpty) {
+        d = DateTime.tryParse(dob);
+      }
+      if (d == null) return null;
+      final now = DateTime.now();
+      var age = now.year - d.year;
+      if (now.month < d.month || (now.month == d.month && now.day < d.day)) {
+        age--;
+      }
+      return age >= 0 ? age : null;
+    } catch (_) {
+      return null;
+    }
   }
 }

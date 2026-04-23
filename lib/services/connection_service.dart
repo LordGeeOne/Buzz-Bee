@@ -3,17 +3,17 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 /// Handles user-to-user connections and related messaging.
 ///
-/// Data model (designed for future multi-connection / paid plans):
+/// Data model (multi-connection):
 ///   users/{uid}/requests/{fromUid}            # pending incoming requests
 ///   users/{uid}/notifications/{id}            # in-app notifications
 ///   connections/{connectionId}
-///     users: [uidA, uidB]                     # always 2 for now
+///     users: [uidA, uidB]                     # always 2 (1:1 chat)
 ///     createdAt, lastActivity
 ///   connections/{connectionId}/messages/{id}
-///     fromUid, type: 'text'|'buzz', text?, timestamp
+///     fromUid, type: 'text'|'buzz'|'voice', text?, timestamp
 ///
-/// Single-connection rule (free tier) is enforced by checking that neither
-/// user already appears in another connection doc before accepting.
+/// A user may participate in many connections at once. The connection id is
+/// deterministic per pair, so accepting the same person twice is a no-op.
 class ConnectionService {
   ConnectionService._();
 
@@ -100,32 +100,16 @@ class ConnectionService {
     });
   }
 
-  /// Accept a request from [fromUid]. Creates the connection doc (only write
-  /// needed) and deletes the pending request. Notifies the original sender.
+  /// Accept a request from [fromUid]. Creates the connection doc and
+  /// deletes the pending request. Notifies the original sender.
   ///
-  /// Throws StateError if either party already has an active connection.
-  ///
-  /// Connection state is mirrored on each user's profile doc as
-  /// `connectionId`. This avoids needing a list query against `connections`
-  /// filtered by another user's uid (which security rules forbid).
+  /// Multi-connection: a user can be in many connections at once. The
+  /// connection id is deterministic per pair, so attempting to accept the
+  /// same person twice is idempotent.
   static Future<void> acceptRequest(String fromUid) async {
     final me = FirebaseAuth.instance.currentUser;
     if (me == null) return;
     final myUidLocal = me.uid;
-
-    // Check my own user doc first (allowed: I own it).
-    final myDoc = await _fs.collection('users').doc(myUidLocal).get();
-    final myConnId = (myDoc.data()?['connectionId'] as String?) ?? '';
-    if (myConnId.isNotEmpty) {
-      throw StateError('You are already connected to someone.');
-    }
-
-    // Check the other user's doc (allowed: any signed-in user can read users).
-    final otherDoc = await _fs.collection('users').doc(fromUid).get();
-    final otherConnId = (otherDoc.data()?['connectionId'] as String?) ?? '';
-    if (otherConnId.isNotEmpty) {
-      throw StateError('That user is already connected to someone else.');
-    }
 
     final connId = connectionIdFor(myUidLocal, fromUid);
     final connRef = _fs.collection('connections').doc(connId);
@@ -134,8 +118,6 @@ class ConnectionService {
         .doc(myUidLocal)
         .collection('requests')
         .doc(fromUid);
-    final myUserRef = _fs.collection('users').doc(myUidLocal);
-    final otherUserRef = _fs.collection('users').doc(fromUid);
 
     final batch = _fs.batch();
     batch.set(connRef, {
@@ -145,9 +127,6 @@ class ConnectionService {
       'sent': {myUidLocal: 0, fromUid: 0},
       'unseen': {myUidLocal: 0, fromUid: 0},
     });
-    // Mirror connectionId on both user docs.
-    batch.set(myUserRef, {'connectionId': connId}, SetOptions(merge: true));
-    batch.set(otherUserRef, {'connectionId': connId}, SetOptions(merge: true));
     batch.delete(reqRef);
     await batch.commit();
 
@@ -173,33 +152,12 @@ class ConnectionService {
         .delete();
   }
 
-  /// Disconnect from current partner. Deletes the connection doc and clears
-  /// `connectionId` on both user docs.
-  static Future<void> disconnect() async {
+  /// Disconnect from a specific connection by id. Deletes the connection doc.
+  /// (Multi-connection model — each connection is removed individually.)
+  static Future<void> disconnect(String connectionId) async {
     final uid = myUid;
     if (uid == null) return;
-    final snap = await _fs
-        .collection('connections')
-        .where('users', arrayContains: uid)
-        .limit(1)
-        .get();
-    if (snap.docs.isEmpty) return;
-    final connDoc = snap.docs.first;
-    final users = ((connDoc.data()['users'] as List?) ?? const [])
-        .cast<String>();
-    final partner = users.firstWhere((u) => u != uid, orElse: () => '');
-
-    final batch = _fs.batch();
-    batch.delete(connDoc.reference);
-    batch.set(_fs.collection('users').doc(uid), {
-      'connectionId': '',
-    }, SetOptions(merge: true));
-    if (partner.isNotEmpty) {
-      batch.set(_fs.collection('users').doc(partner), {
-        'connectionId': '',
-      }, SetOptions(merge: true));
-    }
-    await batch.commit();
+    await _fs.collection('connections').doc(connectionId).delete();
   }
 
   /// Send a non-buzz message (e.g. text) in the given connection.

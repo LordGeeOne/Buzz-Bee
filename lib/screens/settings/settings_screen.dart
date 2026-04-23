@@ -8,6 +8,7 @@ import 'sign_out_screen.dart';
 import 'notes_screen.dart';
 import 'privacy_policy_screen.dart';
 import 'theme_colors_screen.dart';
+import 'typography_screen.dart';
 import 'test_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -82,6 +83,18 @@ class SettingsScreen extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) => const ThemeColorsScreen(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _NavTile(
+                    icon: HugeIcons.strokeRoundedTextFont,
+                    title: 'Typography',
+                    subtitle: 'Browse text styles and bundled fonts',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const TypographyScreen(),
                       ),
                     ),
                   ),

@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -9,8 +10,8 @@ import '../services/connection_service.dart';
 import '../theme/nexaryo_colors.dart';
 import '../widgets/blob_background.dart';
 import 'chat_screen.dart';
-import 'settings/settings_screen.dart';
 import 'people_screen.dart';
+import 'profile_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -67,10 +68,23 @@ class _DashboardScreenState extends State<DashboardScreen>
   Future<void> _refreshChecklist() async {
     final loc = await Permission.locationWhenInUse.status;
     final notif = await Permission.notification.status;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    var imagesUploaded = false;
+    if (uid != null) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .get();
+        final list = (doc.data()?['gallery'] as List?) ?? const [];
+        imagesUploaded = list.whereType<String>().length >= _minGalleryToSearch;
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() {
       _locationGranted = loc.isGranted || loc.isLimited;
       _notificationsGranted = notif.isGranted;
+      _imagesUploaded = imagesUploaded;
     });
   }
 
@@ -92,10 +106,80 @@ class _DashboardScreenState extends State<DashboardScreen>
     _refreshChecklist();
   }
 
-  void _uploadImages() {
-    ScaffoldMessenger.of(
+  Future<void> _uploadImages() async {
+    await Navigator.push(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Image upload coming soon')));
+      MaterialPageRoute(builder: (_) => const ProfileScreen()),
+    );
+    if (!mounted) return;
+    _refreshChecklist();
+  }
+
+  static const int _minGalleryToSearch = 3;
+
+  Future<void> _startSearching() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    int galleryCount = 0;
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final list = (doc.data()?['gallery'] as List?) ?? const [];
+      galleryCount = list.whereType<String>().length;
+    } catch (_) {
+      // On lookup failure we still let the user proceed; the dialog is a
+      // soft gate, not a security boundary.
+    }
+
+    if (!mounted) return;
+    if (galleryCount < _minGalleryToSearch) {
+      await _showAddPhotosDialog(galleryCount);
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const PeopleScreen()),
+    );
+  }
+
+  Future<void> _showAddPhotosDialog(int currentCount) async {
+    final c = context.colors;
+    final missing = _minGalleryToSearch - currentCount;
+    final more = missing == 1 ? '1 more photo' : '$missing more photos';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        title: const Text('Show off your best photos'),
+        content: Text(
+          'A great profile starts with at least '
+          '$_minGalleryToSearch photos. Just $more to go — let people see who you are!',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Maybe later'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: c.primary),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
+              );
+            },
+            child: const Text('Add photos'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _navigateHome() {
@@ -243,104 +327,41 @@ class _DashboardScreenState extends State<DashboardScreen>
                 Text(
                   'Buzz Bee',
                   style: TextStyle(
-                    fontFamily: 'Miloner',
-                    fontSize: 28,
+                    fontFamily: 'Beli',
+                    fontSize: 44,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
                   ),
                 ),
-                Row(
-                  children: [
-                    Container(
-                      height: 68,
-                      width: 68,
-                      decoration: BoxDecoration(
-                        color: c.card,
-                        borderRadius: BorderRadius.circular(34),
-                      ),
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Positioned.fill(
-                            child: IconButton(
-                              icon: HugeIcon(
-                                icon: HugeIcons.strokeRoundedUserGroup,
-                                color: c.textDim,
-                                size: 24,
-                              ),
-                              iconSize: 24,
-                              onPressed: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const PeopleScreen(),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          Positioned(
-                            top: 18,
-                            right: 18,
-                            child: IgnorePointer(
-                              child: StreamBuilder<int>(
-                                stream:
-                                    ConnectionService.pendingRequestsCountStream(),
-                                builder: (context, snap) {
-                                  if ((snap.data ?? 0) == 0) {
-                                    return const SizedBox.shrink();
-                                  }
-                                  return Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: BoxDecoration(
-                                      color: Colors.red,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: c.card,
-                                        width: 1.5,
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
+                Container(
+                  height: 68,
+                  width: 68,
+                  decoration: BoxDecoration(
+                    color: c.card,
+                    borderRadius: BorderRadius.circular(34),
+                  ),
+                  child: IconButton(
+                    icon: HugeIcon(
+                      icon: HugeIcons.strokeRoundedUserCircle,
+                      color: c.textDim,
+                      size: 24,
                     ),
-                    const SizedBox(width: 4),
-                    Container(
-                      height: 68,
-                      width: 68,
-                      decoration: BoxDecoration(
-                        color: c.card,
-                        borderRadius: BorderRadius.circular(34),
-                      ),
-                      child: IconButton(
-                        icon: HugeIcon(
-                          icon: HugeIcons.strokeRoundedSettings01,
-                          color: c.textDim,
-                          size: 24,
+                    iconSize: 24,
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ProfileScreen(),
                         ),
-                        iconSize: 24,
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const SettingsScreen(),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
+                      );
+                    },
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 20),
             Text(
-              'You are single and searching',
+              'Ready when you are',
               style: GoogleFonts.montserrat(
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
@@ -351,7 +372,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             Row(
               children: [
                 Text(
-                  'Your rating',
+                  'Your vibe',
                   style: GoogleFonts.montserrat(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -381,15 +402,10 @@ class _DashboardScreenState extends State<DashboardScreen>
               children: [
                 Expanded(
                   child: _BackPanelButton(
-                    label: 'Start searching',
+                    label: 'Find people',
                     icon: HugeIcons.strokeRoundedSearch01,
                     filled: true,
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const PeopleScreen()),
-                      );
-                    },
+                    onTap: _startSearching,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -401,7 +417,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                     onTap: () {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Verification coming soon'),
+                          content: Text(
+                            'Verification is on the way — stay tuned!',
+                          ),
                         ),
                       );
                     },
@@ -409,34 +427,39 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
               ],
             ),
-            const SizedBox(height: 22),
-            Text(
-              'GET STARTED',
-              style: GoogleFonts.montserrat(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.4,
-                color: Colors.white.withValues(alpha: 0.55),
+            if (!_locationGranted ||
+                !_notificationsGranted ||
+                !_imagesUploaded) ...[
+              const SizedBox(height: 22),
+              Text(
+                'GET STARTED',
+                style: GoogleFonts.montserrat(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.4,
+                  color: Colors.white.withValues(alpha: 0.55),
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            if (!_locationGranted)
-              _ChecklistItem(
-                label: 'Allow location services',
-                checked: false,
-                onTap: _requestLocation,
-              ),
-            if (!_notificationsGranted)
-              _ChecklistItem(
-                label: 'Turn on notifications',
-                checked: false,
-                onTap: _requestNotifications,
-              ),
-            _ChecklistItem(
-              label: 'Upload your images',
-              checked: _imagesUploaded,
-              onTap: _uploadImages,
-            ),
+              const SizedBox(height: 10),
+              if (!_locationGranted)
+                _ChecklistItem(
+                  label: 'Allow location services',
+                  checked: false,
+                  onTap: _requestLocation,
+                ),
+              if (!_notificationsGranted)
+                _ChecklistItem(
+                  label: 'Turn on notifications',
+                  checked: false,
+                  onTap: _requestNotifications,
+                ),
+              if (!_imagesUploaded)
+                _ChecklistItem(
+                  label: 'Upload your images',
+                  checked: false,
+                  onTap: _uploadImages,
+                ),
+            ],
           ],
         ),
       ),
@@ -507,7 +530,7 @@ class _ContactsListState extends State<_ContactsList> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'No connections yet',
+                    'No matches yet — go say hi to someone!',
                     style: GoogleFonts.montserrat(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,

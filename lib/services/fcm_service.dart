@@ -9,8 +9,8 @@ import 'package:flutter/services.dart';
 /// Function reads this to multicast buzz push notifications to the
 /// recipient when the app is backgrounded or killed.
 ///
-/// Foreground buzzes are NOT vibrated here — [BuzzNotifier] handles
-/// vibration via the Firestore `messages` stream to avoid double-firing.
+/// Foreground buzzes are NOT vibrated here — the [ChatScreen] handles
+/// vibration via the per-connection messages stream to avoid double-firing.
 class FcmService {
   FcmService._();
   static final FcmService instance = FcmService._();

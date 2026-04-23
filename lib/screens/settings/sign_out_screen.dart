@@ -184,7 +184,7 @@ class SignOutScreen extends StatelessWidget {
                       Text(
                         user?.displayName ?? 'User',
                         style: const TextStyle(
-                          fontFamily: 'Miloner',
+                          fontFamily: 'Beli',
                           fontSize: 24,
                           fontWeight: FontWeight.w600,
                         ),

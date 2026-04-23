@@ -49,6 +49,7 @@ dependencies:
   record: ^6.2.0
   just_audio: ^0.9.40
   path_provider: ^2.1.4
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:
@@ -112,19 +113,30 @@ flutter:
   # see https://flutter.dev/to/font-from-package
 
   fonts:
-    - family: ZTOtez
+    - family: Beli
       fonts:
-        - asset: assets/fonts/ZTOtez-Regular.ttf
-        - asset: assets/fonts/ZTOtez-Italic.ttf
-          style: italic
-    - family: Uniwars
+        - asset: assets/fonts/Beli.ttf
+    - family: Cafigine
       fonts:
-        - asset: assets/fonts/Uniwars Hv.otf
-        - asset: assets/fonts/Uniwars Hv It.otf
-          style: italic
-    - family: Talero
+        - asset: assets/fonts/Cafigine.otf
+    - family: Elistora
       fonts:
-        - asset: assets/fonts/TALERO v1.otf
+        - asset: assets/fonts/Elistora.ttf
+    - family: Klomisk
+      fonts:
+        - asset: assets/fonts/Klomisk.otf
     - family: Miloner
       fonts:
         - asset: assets/fonts/MILONER-Medium.ttf
+    - family: Mirella
+      fonts:
+        - asset: assets/fonts/Mirella.ttf
+    - family: Pastone
+      fonts:
+        - asset: assets/fonts/Pastone.otf
+    - family: Petrichor
+      fonts:
+        - asset: assets/fonts/Petrichor.ttf
+    - family: Veneza
+      fonts:
+        - asset: assets/fonts/Veneza.ttf

@@ -79,7 +79,7 @@ class _SplashScreenState extends State<SplashScreen>
               child: Text(
                 'Buzz Bee',
                 style: TextStyle(
-                  fontFamily: 'Miloner',
+                  fontFamily: 'Beli',
                   fontSize: 52,
                   fontWeight: FontWeight.w600,
                   color: Colors.white,
@@ -99,7 +99,7 @@ class _SplashScreenState extends State<SplashScreen>
                   Text(
                     'Developed by',
                     style: TextStyle(
-                      fontFamily: 'Miloner',
+                      fontFamily: 'Beli',
                       fontSize: 12,
                       letterSpacing: 2,
                       color: Colors.white70,
@@ -109,7 +109,7 @@ class _SplashScreenState extends State<SplashScreen>
                   Text(
                     'NEXARYO',
                     style: TextStyle(
-                      fontFamily: 'Miloner',
+                      fontFamily: 'Beli',
                       fontSize: 18,
                       letterSpacing: 3,
                       color: Colors.white,

@@ -1,7 +1,22 @@
 import 'package:flutter/material.dart';
 import '../../theme/app_text_styles.dart';
+import '../../theme/nexaryo_colors.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/style_sample.dart';
+
+/// All custom font families bundled in `assets/fonts/` and registered in
+/// `pubspec.yaml`. Update both places when adding or removing fonts.
+const List<String> kCustomFontFamilies = [
+  'Beli',
+  'Cafigine',
+  'Elistora',
+  'Klomisk',
+  'Miloner',
+  'Mirella',
+  'Pastone',
+  'Petrichor',
+  'Veneza',
+];
 
 class TypographySection extends StatelessWidget {
   const TypographySection({super.key});
@@ -9,6 +24,7 @@ class TypographySection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ts = context.textStyles;
+    final c = context.colors;
     final styles = [
       _StyleEntry('Heading 1', ts.heading1, 'Page Titles'),
       _StyleEntry('Heading 2', ts.heading2, 'Section Titles'),
@@ -42,6 +58,17 @@ class TypographySection extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(height: 24),
+          const SectionHeader(
+            title: 'Custom Fonts',
+            description: 'Display fonts bundled with the app.',
+          ),
+          ...kCustomFontFamilies.map(
+            (family) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _FontSample(family: family, color: c.textPrimary),
+            ),
+          ),
         ],
       ),
     );
@@ -53,4 +80,44 @@ class _StyleEntry {
   final TextStyle style;
   final String sample;
   _StyleEntry(this.name, this.style, this.sample);
+}
+
+class _FontSample extends StatelessWidget {
+  const _FontSample({required this.family, required this.color});
+
+  final String family;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: c.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: c.cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(family, style: TextStyle(fontSize: 12, color: c.textDim)),
+          const SizedBox(height: 6),
+          Text(
+            'NEXARYO',
+            style: TextStyle(fontFamily: family, fontSize: 28, color: color),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Buzz Bee',
+            style: TextStyle(
+              fontFamily: family,
+              fontSize: 22,
+              color: color.withValues(alpha: 0.8),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

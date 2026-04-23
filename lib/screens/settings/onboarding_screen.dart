@@ -209,7 +209,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Something went wrong. Please try again.',
+              'Hmm, something went wrong. Mind trying again?',
               style: GoogleFonts.montserrat(),
             ),
             behavior: SnackBarBehavior.floating,
@@ -282,7 +282,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 Text(
                   "What's your name?",
                   style: TextStyle(
-                    fontFamily: 'Miloner',
+                    fontFamily: 'Beli',
                     fontSize: 26,
                     fontWeight: FontWeight.w600,
                     color: c.textPrimary,
@@ -433,9 +433,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               children: [
                 const SizedBox(height: 20),
                 Text(
-                  'About you',
+                  'Tell us about you',
                   style: TextStyle(
-                    fontFamily: 'Miloner',
+                    fontFamily: 'Beli',
                     fontSize: 26,
                     fontWeight: FontWeight.w600,
                     color: c.textPrimary,
@@ -443,7 +443,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'This helps us personalise your experience',
+                  'A little intro goes a long way',
                   style: GoogleFonts.montserrat(fontSize: 13, color: c.textDim),
                 ),
                 const SizedBox(height: 32),
@@ -585,9 +585,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               children: [
                 const SizedBox(height: 20),
                 Text(
-                  'Permissions',
+                  'Almost there',
                   style: TextStyle(
-                    fontFamily: 'Miloner',
+                    fontFamily: 'Beli',
                     fontSize: 26,
                     fontWeight: FontWeight.w600,
                     color: c.textPrimary,
@@ -595,15 +595,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'We need a couple of permissions to get started',
+                  'Just a couple of permissions and you\'re in',
                   style: GoogleFonts.montserrat(fontSize: 13, color: c.textDim),
                 ),
                 const SizedBox(height: 32),
                 _buildPermissionTile(
                   c,
                   icon: HugeIcons.strokeRoundedLocation01,
-                  title: 'Approximate Location',
-                  subtitle: 'To show people near you',
+                  title: 'Your location',
+                  subtitle: 'So we can find people near you',
                   granted: _locationGranted,
                   onTap: _requestLocation,
                 ),
@@ -612,7 +612,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   c,
                   icon: HugeIcons.strokeRoundedNotification01,
                   title: 'Notifications',
-                  subtitle: 'To let you know when someone buzzes you',
+                  subtitle: "So you don't miss a buzz",
                   granted: _notificationsGranted,
                   onTap: _requestNotifications,
                 ),
