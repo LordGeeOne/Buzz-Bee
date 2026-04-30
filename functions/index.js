@@ -7,7 +7,7 @@
  * the connection doc, which the Flutter ChatScreen toggles).
  */
 
-const {onDocumentCreated} = require("firebase-functions/v2/firestore");
+const {onDocumentCreated, onDocumentUpdated} = require("firebase-functions/v2/firestore");
 const {logger} = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
@@ -123,5 +123,105 @@ exports.onBuzzMessageCreated = onDocumentCreated(
           fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalid),
         });
       }
+    },
+);
+
+/**
+ * Voice-call invite: when a new call doc is created with state=='ringing',
+ * push a high-priority data-only FCM message to the callee. The Flutter
+ * client uses this to show the Android ConnectionService incoming-call UI.
+ */
+exports.onCallCreated = onDocumentCreated(
+    "connections/{connId}/calls/{callId}",
+    async (event) => {
+      const snap = event.data;
+      if (!snap) return;
+      const call = snap.data() || {};
+      if (call.state !== "ringing") return;
+
+      const callerUid = call.callerUid;
+      const calleeUid = call.calleeUid;
+      const callId = call.callId || event.params.callId;
+      const connId = event.params.connId;
+      if (!callerUid || !calleeUid || !callId) return;
+
+      const [calleeSnap, callerSnap] = await Promise.all([
+        db.collection("users").doc(calleeUid).get(),
+        db.collection("users").doc(callerUid).get(),
+      ]);
+      const tokens = (calleeSnap.data() || {}).fcmTokens || [];
+      if (!Array.isArray(tokens) || tokens.length === 0) {
+        logger.info("No FCM tokens for callee", {calleeUid});
+        return;
+      }
+      const callerName = (callerSnap.data() || {}).name || "Someone";
+
+      const message = {
+        tokens: tokens.filter((t) => typeof t === "string"),
+        data: {
+          type: "call_invite",
+          callId: String(callId),
+          connectionId: String(connId),
+          callerUid: String(callerUid),
+          callerName: String(callerName),
+        },
+        android: {
+          priority: "high",
+          ttl: 30 * 1000,
+        },
+      };
+
+      const response = await admin.messaging().sendEachForMulticast(message);
+      logger.info("call invite sent", {
+        callId,
+        calleeUid,
+        success: response.successCount,
+        failure: response.failureCount,
+      });
+    },
+);
+
+/**
+ * Voice-call cancel: when a ringing call is declined / ended / missed by
+ * either side, push a data-only cancel message so the other device
+ * dismisses its ConnectionService incoming-call UI.
+ */
+exports.onCallStateChanged = onDocumentUpdated(
+    "connections/{connId}/calls/{callId}",
+    async (event) => {
+      const before = event.data.before.data() || {};
+      const after = event.data.after.data() || {};
+      if (before.state === after.state) return;
+      const terminal = ["ended", "declined", "missed", "failed"];
+      if (!terminal.includes(after.state)) return;
+
+      const callerUid = after.callerUid;
+      const calleeUid = after.calleeUid;
+      const callId = after.callId || event.params.callId;
+      const connId = event.params.connId;
+      if (!callerUid || !calleeUid || !callId) return;
+
+      // Notify the callee to dismiss the incoming-call UI if it was still
+      // ringing. (The caller's UI is driven directly by the Firestore doc.)
+      const calleeSnap = await db.collection("users").doc(calleeUid).get();
+      const tokens = (calleeSnap.data() || {}).fcmTokens || [];
+      if (!Array.isArray(tokens) || tokens.length === 0) return;
+
+      const message = {
+        tokens: tokens.filter((t) => typeof t === "string"),
+        data: {
+          type: "call_cancel",
+          callId: String(callId),
+          connectionId: String(connId),
+          state: String(after.state),
+        },
+        android: {priority: "high", ttl: 30 * 1000},
+      };
+      const response = await admin.messaging().sendEachForMulticast(message);
+      logger.info("call cancel sent", {
+        callId,
+        success: response.successCount,
+        failure: response.failureCount,
+      });
     },
 );

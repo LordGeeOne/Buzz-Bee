@@ -80,6 +80,25 @@ service cloud.firestore {
                            && request.auth.uid in
                               get(/databases/$(database)/documents/connections/$(connectionId)).data.users;
       }
+
+      // Voice-call signaling: WebRTC offer/answer + ICE candidates.
+      // Only the two connection participants can read/write call docs.
+      match /calls/{callId} {
+        allow read, write: if request.auth != null
+                           && request.auth.uid in
+                              get(/databases/$(database)/documents/connections/$(connectionId)).data.users;
+
+        match /callerCandidates/{candidateId} {
+          allow read, write: if request.auth != null
+                             && request.auth.uid in
+                                get(/databases/$(database)/documents/connections/$(connectionId)).data.users;
+        }
+        match /calleeCandidates/{candidateId} {
+          allow read, write: if request.auth != null
+                             && request.auth.uid in
+                                get(/databases/$(database)/documents/connections/$(connectionId)).data.users;
+        }
+      }
     }
 
     match /usernames/{username} {

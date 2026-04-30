@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import '../theme/app_text_styles.dart';
 import '../theme/nexaryo_colors.dart';
 import '../widgets/profile_gallery_section.dart';
+import '../services/connection_service.dart';
 import 'auto_bio_screen.dart';
 import 'edit_profile_screen.dart';
 import 'image_viewer_screen.dart';
@@ -288,35 +289,7 @@ class _ProfileBody extends StatelessWidget {
 
         // Action buttons (peers only).
         if (!isSelf) ...[
-          Row(
-            children: [
-              Expanded(
-                child: _ProfileActionButton(
-                  label: 'Message',
-                  icon: HugeIcons.strokeRoundedMessage01,
-                  filled: true,
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Messaging coming soon')),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _ProfileActionButton(
-                  label: 'Connect',
-                  icon: HugeIcons.strokeRoundedUserAdd01,
-                  filled: false,
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Connect coming soon')),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+          _ConnectActionButton(peerUid: uid),
           const SizedBox(height: 24),
         ],
 
@@ -405,6 +378,110 @@ class _RatingCard extends StatelessWidget {
           }),
         ],
       ),
+    );
+  }
+}
+
+class _ConnectActionButton extends StatefulWidget {
+  final String peerUid;
+  const _ConnectActionButton({required this.peerUid});
+
+  @override
+  State<_ConnectActionButton> createState() => _ConnectActionButtonState();
+}
+
+class _ConnectActionButtonState extends State<_ConnectActionButton> {
+  bool _busy = false;
+
+  String? get _myUid => FirebaseAuth.instance.currentUser?.uid;
+
+  Future<void> _connect() async {
+    setState(() => _busy = true);
+    try {
+      await ConnectionService.sendRequest(widget.peerUid);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Connect request sent')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Couldn't send request")));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _disconnect(String connId) async {
+    final c = context.colors;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: c.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        title: const Text('Disconnect?'),
+        content: const Text(
+          'You will no longer be able to message each other and your chat history will be removed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: c.primary),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => _busy = true);
+    try {
+      await ConnectionService.disconnect(connId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Disconnected')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Couldn't disconnect")));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final myUid = _myUid;
+    if (myUid == null) return const SizedBox.shrink();
+    final connId = ConnectionService.connectionIdFor(myUid, widget.peerUid);
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('connections')
+          .doc(connId)
+          .snapshots(),
+      builder: (context, snap) {
+        final connected = snap.data?.exists == true;
+        return _ProfileActionButton(
+          label: _busy
+              ? 'Please wait…'
+              : connected
+              ? 'Disconnect'
+              : 'Connect',
+          icon: connected
+              ? HugeIcons.strokeRoundedUserRemove01
+              : HugeIcons.strokeRoundedUserAdd01,
+          filled: !connected,
+          onTap: _busy
+              ? () {}
+              : (connected ? () => _disconnect(connId) : _connect),
+        );
+      },
     );
   }
 }

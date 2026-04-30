@@ -29,6 +29,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _locationGranted = false;
   bool _notificationsGranted = false;
   bool _imagesUploaded = false;
+  bool _checklistLoaded = false;
 
   static const _sections = [
     _Section('Home', null),
@@ -85,6 +86,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       _locationGranted = loc.isGranted || loc.isLimited;
       _notificationsGranted = notif.isGranted;
       _imagesUploaded = imagesUploaded;
+      _checklistLoaded = true;
     });
   }
 
@@ -427,9 +429,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
               ],
             ),
-            if (!_locationGranted ||
-                !_notificationsGranted ||
-                !_imagesUploaded) ...[
+            if (_checklistLoaded &&
+                (!_locationGranted ||
+                    !_notificationsGranted ||
+                    !_imagesUploaded)) ...[
               const SizedBox(height: 22),
               Text(
                 'GET STARTED',
@@ -517,55 +520,119 @@ class _ContactsListState extends State<_ContactsList> {
             );
           }
           final docs = snap.data ?? const [];
-          if (docs.isEmpty || myUid == null) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 40),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  HugeIcon(
-                    icon: HugeIcons.strokeRoundedUserGroup,
-                    color: c.textDim,
-                    size: 40,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'No matches yet — go say hi to someone!',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: c.textDim,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
           final partnerUids = <String>[];
-          for (final d in docs) {
-            final users = ((d.data()['users'] as List?) ?? const [])
-                .cast<String>();
-            final partner = users.firstWhere(
-              (u) => u != myUid,
-              orElse: () => '',
-            );
-            if (partner.isNotEmpty) partnerUids.add(partner);
+          if (myUid != null) {
+            for (final d in docs) {
+              final users = ((d.data()['users'] as List?) ?? const [])
+                  .cast<String>();
+              final partner = users.firstWhere(
+                (u) => u != myUid,
+                orElse: () => '',
+              );
+              if (partner.isNotEmpty) partnerUids.add(partner);
+            }
+          }
+          final tiles = <Widget>[
+            for (final uid in partnerUids)
+              _ContactTile(uid: uid, onTap: () => widget.onOpenChat(uid)),
+          ];
+          if (tiles.isEmpty) {
+            return const _EmptyContactsPrompt();
           }
           return Column(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (final uid in partnerUids)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _ContactTile(
-                    uid: uid,
-                    onTap: () => widget.onOpenChat(uid),
+              for (var i = 0; i < tiles.length; i++) ...[
+                tiles[i],
+                if (i < tiles.length - 1)
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: c.cardBorder.withValues(alpha: 0.45),
+                    indent: 70,
                   ),
-                ),
+              ],
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _EmptyContactsPrompt extends StatelessWidget {
+  const _EmptyContactsPrompt();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 24, 8, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            height: 84,
+            width: 84,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: c.primary.withValues(alpha: 0.12),
+            ),
+            child: Center(
+              child: HugeIcon(
+                icon: HugeIcons.strokeRoundedUserGroup,
+                color: c.primary,
+                size: 36,
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            'No connections yet',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.montserrat(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: c.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              "Swipe down and tap Find people to discover someone worth buzzing about.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: c.textDim,
+                height: 1.45,
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              HugeIcon(
+                icon: HugeIcons.strokeRoundedArrowUp01,
+                color: c.primary,
+                size: 18,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Find people up top',
+                style: GoogleFonts.montserrat(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: c.primary,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -582,93 +649,210 @@ class _ContactTile extends StatefulWidget {
 }
 
 class _ContactTileState extends State<_ContactTile> {
-  late final Future<DocumentSnapshot<Map<String, dynamic>>> _future;
+  Future<DocumentSnapshot<Map<String, dynamic>>>? _future;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _lastMsgStream;
+
+  // Process-wide caches so name/avatar render synchronously on subsequent
+  // mounts (e.g. when navigating back to the dashboard).
+  static final Map<String, ImageProvider> _avatarCache = {};
+  static final Map<String, Map<String, dynamic>> _userDataCache = {};
+
+  static ImageProvider _avatarProviderFor(String url) {
+    return _avatarCache.putIfAbsent(url, () => NetworkImage(url));
+  }
 
   @override
   void initState() {
     super.initState();
-    _future = FirebaseFirestore.instance
-        .collection('users')
-        .doc(widget.uid)
-        .get();
+  }
+
+  String _previewFor(Map<String, dynamic> m, String myUid) {
+    final type = (m['type'] as String?) ?? 'text';
+    final mine = m['fromUid'] == myUid;
+    final prefix = mine ? 'You: ' : '';
+    switch (type) {
+      case 'buzz':
+        final count = ((m['count'] as num?) ?? 1).toInt();
+        return '${prefix}Buzz${count > 1 ? ' ×$count' : ''}';
+      case 'voice':
+        return '${prefix}🎤 Voice message';
+      case 'call':
+        final outcome = (m['callOutcome'] as String?) ?? 'ended';
+        switch (outcome) {
+          case 'completed':
+            return mine ? 'Outgoing call' : 'Incoming call';
+          case 'missed':
+            return mine ? 'No answer' : 'Missed call';
+          case 'declined':
+            return mine ? 'Call declined' : 'You declined';
+          case 'failed':
+            return "Call didn't connect";
+          default:
+            return 'Call';
+        }
+      case 'text':
+      default:
+        final text = ((m['text'] as String?) ?? '').trim();
+        if (text.isEmpty) return '${prefix}Message';
+        return '$prefix$text';
+    }
+  }
+
+  String _formatTime(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final that = DateTime(dt.year, dt.month, dt.day);
+    final diffDays = today.difference(that).inDays;
+    if (diffDays == 0) {
+      final h12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final m = dt.minute.toString().padLeft(2, '0');
+      final p = dt.hour < 12 ? 'AM' : 'PM';
+      return '$h12:$m $p';
+    }
+    if (diffDays == 1) return 'Yesterday';
+    if (diffDays < 7) {
+      const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      return wd[dt.weekday - 1];
+    }
+    return '${dt.month}/${dt.day}/${dt.year % 100}';
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    final myUid = ConnectionService.myUid ?? '';
+    _future ??= FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.uid)
+        .get()
+        .then((doc) {
+          final d = doc.data();
+          if (d != null) _userDataCache[widget.uid] = d;
+          return doc;
+        });
+    _lastMsgStream ??= FirebaseFirestore.instance
+        .collection('connections')
+        .doc(ConnectionService.connectionIdFor(myUid, widget.uid))
+        .collection('messages')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots();
     return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       future: _future,
       builder: (context, snap) {
-        final data = snap.data?.data() ?? const <String, dynamic>{};
+        // Prefer cached user data so name + avatar appear instantly on
+        // subsequent mounts; fall back to live snapshot data otherwise.
+        final data =
+            _userDataCache[widget.uid] ??
+            snap.data?.data() ??
+            const <String, dynamic>{};
         final name = (data['name'] as String?)?.trim().isNotEmpty == true
             ? data['name'] as String
-            : 'User';
-        final username = (data['username'] as String?) ?? '';
+            : '';
         final photo = (data['photoURL'] as String?) ?? '';
-        return Material(
-          color: c.card,
-          borderRadius: BorderRadius.circular(34),
-          child: InkWell(
-            onTap: widget.onTap,
-            borderRadius: BorderRadius.circular(34),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(34),
-                border: Border.all(color: c.cardBorder),
-              ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: c.cardBorder,
-                    backgroundImage: photo.isNotEmpty
-                        ? NetworkImage(photo)
-                        : null,
-                    child: photo.isEmpty
-                        ? HugeIcon(
-                            icon: HugeIcons.strokeRoundedUser,
-                            color: c.textDim,
-                            size: 22,
-                          )
-                        : null,
+        return InkWell(
+          onTap: widget.onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: c.cardBorder,
+                  backgroundImage: photo.isNotEmpty
+                      ? _avatarProviderFor(photo)
+                      : null,
+                  child: photo.isEmpty
+                      ? HugeIcon(
+                          icon: HugeIcons.strokeRoundedUser,
+                          color: c.textDim,
+                          size: 22,
+                        )
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _lastMsgStream,
+                    builder: (context, msgSnap) {
+                      final docs = msgSnap.data?.docs ?? const [];
+                      String preview;
+                      DateTime? when;
+                      if (docs.isEmpty) {
+                        preview = 'Say hi 👋';
+                      } else {
+                        final m = docs.first.data();
+                        preview = _previewFor(m, ConnectionService.myUid ?? '');
+                        final ts = m['timestamp'];
+                        if (ts is Timestamp) when = ts.toDate();
+                      }
+                      return _tileBody(
+                        c: c,
+                        name: name.isEmpty ? 'User' : name,
+                        preview: preview,
+                        timeText: when == null ? '' : _formatTime(when),
+                      );
+                    },
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          name,
-                          style: GoogleFonts.montserrat(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: c.textPrimary,
-                          ),
-                        ),
-                        if (username.isNotEmpty)
-                          Text(
-                            '@$username',
-                            style: GoogleFonts.montserrat(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: c.textDim,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  HugeIcon(
-                    icon: HugeIcons.strokeRoundedArrowRight01,
-                    color: c.textDim,
-                    size: 20,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _tileBody({
+    required NexaryoColors c,
+    required String name,
+    required String preview,
+    required String timeText,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.montserrat(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: c.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                preview,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.montserrat(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: c.textDim,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (timeText.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Text(
+            timeText,
+            style: GoogleFonts.montserrat(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: c.textDim,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

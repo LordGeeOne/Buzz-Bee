@@ -27,6 +27,8 @@ android {
         applicationId = "com.nexaryo.buzz"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Bumped to 23 (Marshmallow) for flutter_webrtc + flutter_callkit_incoming
+        // (ConnectionService / runtime audio permissions).
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

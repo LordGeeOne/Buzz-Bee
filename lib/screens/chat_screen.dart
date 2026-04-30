@@ -9,12 +9,17 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../services/connection_service.dart';
+import '../services/call_service.dart';
 import '../services/presence_service.dart';
 import '../services/voice_player_registry.dart';
 import '../services/voice_recorder_service.dart';
 import '../theme/nexaryo_colors.dart';
+import '../widgets/call_banner_overlay.dart';
+import 'call_screen.dart';
+import 'profile_screen.dart';
 
 /// Full-screen chat with a connected partner.
 ///
@@ -39,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   String? _connectionId;
   String? _partnerName;
+  String? _partnerPhoto;
   Stream<QuerySnapshot<Map<String, dynamic>>>? _messagesStream;
   int _serverSent = 0;
   int _pendingCount = 0;
@@ -101,6 +107,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _partnerName = pSnap.data()?['name'] as String?;
+      _partnerPhoto = pSnap.data()?['photoURL'] as String?;
       _connected.value = true;
     });
 
@@ -203,6 +210,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _onConnSnap(DocumentSnapshot<Map<String, dynamic>> snap) {
+    if (!snap.exists) {
+      // The other user (or we) disconnected. Block sending.
+      _connected.value = false;
+      return;
+    }
+    _connected.value = true;
     final data = snap.data();
     if (data == null) return;
     final myUid = FirebaseAuth.instance.currentUser?.uid;
@@ -269,6 +282,45 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       text: text,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+  }
+
+  Future<void> _startVoiceCall() async {
+    final connId = _connectionId;
+    if (connId == null || connId.isEmpty) return;
+    if (CallService.instance.inCall) return;
+    HapticFeedback.mediumImpact();
+    final mic = await Permission.microphone.request();
+    if (!mic.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Microphone permission required')),
+      );
+      return;
+    }
+    try {
+      final callId = await CallService.instance.startCall(
+        connectionId: connId,
+        calleeUid: widget.partnerUid,
+        calleeName: _partnerName,
+      );
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => CallScreen(
+            callId: callId,
+            connectionId: connId,
+            peerUid: widget.partnerUid,
+            peerName: _partnerName ?? '',
+            isIncoming: false,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not start call: $e')));
+    }
   }
 
   // ── Voice recording ──
@@ -428,7 +480,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                               (d) =>
                                   (d.data()['type'] as String?) == 'text' ||
                                   (d.data()['type'] as String?) == 'buzz' ||
-                                  (d.data()['type'] as String?) == 'voice',
+                                  (d.data()['type'] as String?) == 'voice' ||
+                                  (d.data()['type'] as String?) == 'call',
                             )
                             .toList();
                         // Hide docs that already have a pending placeholder
@@ -521,19 +574,32 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                                 idx == 0 || prevFromUid != data['fromUid'];
                             return KeyedSubtree(
                               key: ValueKey(doc.id),
-                              child: _buildBubble(
-                                c,
-                                messageId: doc.id,
-                                mine: mine,
-                                type: type,
-                                text: (data['text'] ?? '') as String,
-                                voiceUrl: data['url'] as String?,
-                                voiceDurationMs: (data['duration'] as num?)
-                                    ?.toInt(),
-                                voiceWaveform: _waveformFor(doc.id, data),
-                                time: _formatTimestamp(ts),
-                                showTime: showTime,
-                              ),
+                              child: type == 'call'
+                                  ? _buildCallLogBubble(
+                                      c,
+                                      mine: mine,
+                                      outcome:
+                                          (data['callOutcome'] as String?) ??
+                                          'missed',
+                                      durationMs:
+                                          ((data['durationMs'] as num?) ?? 0)
+                                              .toInt(),
+                                      time: _formatTimestamp(ts),
+                                      showTime: showTime,
+                                    )
+                                  : _buildBubble(
+                                      c,
+                                      messageId: doc.id,
+                                      mine: mine,
+                                      type: type,
+                                      text: (data['text'] ?? '') as String,
+                                      voiceUrl: data['url'] as String?,
+                                      voiceDurationMs:
+                                          (data['duration'] as num?)?.toInt(),
+                                      voiceWaveform: _waveformFor(doc.id, data),
+                                      time: _formatTimestamp(ts),
+                                      showTime: showTime,
+                                    ),
                             );
                           },
                         );
@@ -583,25 +649,43 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             ),
             onPressed: () => Navigator.pop(context),
           ),
-          Container(
-            height: 42,
-            width: 42,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: c.primary.withValues(alpha: 0.15),
-              border: Border.all(color: c.primary, width: 2),
-            ),
-            child: Center(
-              child: Text(
-                (_partnerName?.isNotEmpty ?? false)
-                    ? _partnerName![0].toUpperCase()
-                    : '?',
-                style: GoogleFonts.montserrat(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: c.primary,
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ProfileScreen(uid: widget.partnerUid),
                 ),
+              );
+            },
+            child: Container(
+              height: 42,
+              width: 42,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: c.primary.withValues(alpha: 0.15),
+                border: Border.all(color: c.primary, width: 2),
+                image: (_partnerPhoto != null && _partnerPhoto!.isNotEmpty)
+                    ? DecorationImage(
+                        image: NetworkImage(_partnerPhoto!),
+                        fit: BoxFit.cover,
+                      )
+                    : null,
               ),
+              child: (_partnerPhoto != null && _partnerPhoto!.isNotEmpty)
+                  ? null
+                  : Center(
+                      child: Text(
+                        (_partnerName?.isNotEmpty ?? false)
+                            ? _partnerName![0].toUpperCase()
+                            : '?',
+                        style: GoogleFonts.montserrat(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: c.primary,
+                        ),
+                      ),
+                    ),
             ),
           ),
           const SizedBox(width: 12),
@@ -652,6 +736,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            tooltip: 'Voice call',
+            icon: HugeIcon(
+              icon: HugeIcons.strokeRoundedCall02,
+              color: c.primary,
+              size: 24,
+            ),
+            onPressed: _startVoiceCall,
           ),
           Material(
             color: c.primary,
@@ -800,6 +893,151 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildCallLogBubble(
+    NexaryoColors c, {
+    required bool mine,
+    required String outcome,
+    required int durationMs,
+    required String time,
+    required bool showTime,
+  }) {
+    final isMissedish =
+        outcome == 'missed' || outcome == 'declined' || outcome == 'failed';
+    final iconColor = isMissedish ? const Color(0xFFE53935) : c.primary;
+    final iconData = mine
+        ? HugeIcons.strokeRoundedCallOutgoing01
+        : HugeIcons.strokeRoundedCallIncoming01;
+
+    String label;
+    switch (outcome) {
+      case 'completed':
+        label = mine ? 'Outgoing call' : 'Incoming call';
+        break;
+      case 'missed':
+        label = mine ? 'No answer' : 'Missed call';
+        break;
+      case 'declined':
+        label = mine ? 'Declined' : 'You declined';
+        break;
+      case 'failed':
+        label = "Couldn't connect";
+        break;
+      default:
+        label = 'Call';
+    }
+
+    String fmtDuration(int ms) {
+      if (ms <= 0) return '';
+      final d = Duration(milliseconds: ms);
+      final mins = d.inMinutes;
+      final secs = d.inSeconds % 60;
+      if (mins > 0) return '$mins min ${secs.toString().padLeft(2, '0')} sec';
+      return '$secs sec';
+    }
+
+    final durationStr = fmtDuration(durationMs);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () async {
+              HapticFeedback.selectionClick();
+              // If a call is already active, jump to it instead.
+              final active = CallService.instance.current;
+              if (active != null) {
+                if (!mounted) return;
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => CallScreen(
+                      callId: active.callId,
+                      connectionId: active.connectionId,
+                      peerUid: active.peerUid,
+                      peerName: active.peerName ?? _partnerName ?? '',
+                      isIncoming: !active.isCaller,
+                    ),
+                  ),
+                );
+                return;
+              }
+              final ok = await showCallConfirmDialog(
+                context,
+                peerName: _partnerName ?? '',
+              );
+              if (ok && mounted) {
+                _startVoiceCall();
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: c.card,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: c.cardBorder),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  HugeIcon(icon: iconData, color: iconColor, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: c.textPrimary,
+                    ),
+                  ),
+                  if (durationStr.isNotEmpty) ...[
+                    Text(
+                      ' · ',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 12,
+                        color: c.textDim,
+                      ),
+                    ),
+                    Text(
+                      durationStr,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 12,
+                        color: c.textDim,
+                      ),
+                    ),
+                  ],
+                  if (showTime && time.isNotEmpty) ...[
+                    Text(
+                      ' · ',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 12,
+                        color: c.textDim,
+                      ),
+                    ),
+                    Text(
+                      time,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 12,
+                        color: c.textDim,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 4),
+                  HugeIcon(
+                    icon: HugeIcons.strokeRoundedArrowRight01,
+                    color: c.textDim,
+                    size: 14,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPendingVoiceBubble(
     NexaryoColors c,
     _PendingVoice p, {
@@ -911,11 +1149,51 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   Widget _buildInputBar(NexaryoColors c) {
     return ValueListenableBuilder<bool>(
-      valueListenable: _isRecording,
-      builder: (context, recording, _) {
-        if (recording) return _buildRecordingBar(c);
-        return _buildNormalInputBar(c);
+      valueListenable: _connected,
+      builder: (context, connected, _) {
+        if (!connected) return _buildDisconnectedBar(c);
+        return ValueListenableBuilder<bool>(
+          valueListenable: _isRecording,
+          builder: (context, recording, _) {
+            if (recording) return _buildRecordingBar(c);
+            return _buildNormalInputBar(c);
+          },
+        );
       },
+    );
+  }
+
+  Widget _buildDisconnectedBar(NexaryoColors c) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: c.card,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: c.cardBorder),
+        ),
+        child: Row(
+          children: [
+            HugeIcon(
+              icon: HugeIcons.strokeRoundedUserRemove01,
+              color: c.textDim,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                "You're not connected with ${_partnerName ?? 'this user'} anymore.",
+                style: GoogleFonts.montserrat(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: c.textDim,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

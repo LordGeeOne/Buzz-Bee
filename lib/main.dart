@@ -10,11 +10,13 @@ import 'providers/settings_provider.dart';
 import 'providers/theme_provider.dart';
 import 'services/fcm_service.dart';
 import 'services/presence_service.dart';
+import 'services/callkit_service.dart';
 import 'theme/nexaryo_colors.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/settings/login_screen.dart';
 import 'screens/settings/onboarding_screen.dart';
 import 'screens/splash_screen.dart';
+import 'widgets/call_banner_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +25,7 @@ void main() async {
   final themeProvider = ThemeProvider();
   await Future.wait([settings.load(), themeProvider.load()]);
   await FcmService.instance.start();
+  await CallkitService.instance.start();
   if (FirebaseAuth.instance.currentUser != null) {
     PresenceService.instance.start();
   }
@@ -58,6 +61,9 @@ class NexaryoStyleGuide extends StatelessWidget {
             darkTheme: _buildThemeData(theme.darkColors, Brightness.dark),
             themeMode: theme.themeMode,
             home: const _SplashEntry(),
+            builder: (context, child) {
+              return CallBannerOverlay(child: child ?? const SizedBox.shrink());
+            },
           );
         },
       ),
@@ -179,6 +185,26 @@ class _SplashEntry extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Cold-launched from a lock-screen "Accept" tap → skip splash entirely
+    // and let CallkitService push the call screen as soon as the navigator
+    // is ready.
+    if (CallkitService.instance.pendingIncoming.value != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final p = CallkitService.instance.pendingIncoming.value;
+        if (p == null) return;
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          _goToDashboard();
+        }
+        CallkitService.instance.pushCallScreen(
+          callId: p.callId,
+          connectionId: p.connectionId,
+          peerUid: p.callerUid,
+          peerName: p.callerName,
+        );
+      });
+      return const SizedBox.shrink();
+    }
     return SplashScreen(
       onFinished: () async {
         final user = FirebaseAuth.instance.currentUser;

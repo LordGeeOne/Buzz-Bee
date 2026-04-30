@@ -1,7 +1,42 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/services.dart';
+
+import '../firebase_options.dart';
+import 'callkit_service.dart';
+
+/// Top-level background handler. Must be a top-level / static function and
+/// annotated as a vm:entry-point so it survives the isolate split.
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await _routeData(message.data);
+}
+
+Future<void> _routeData(Map<String, dynamic> data) async {
+  final type = data['type'];
+  if (type == 'call_invite') {
+    final callId = data['callId'] as String?;
+    final connectionId = data['connectionId'] as String?;
+    final callerUid = data['callerUid'] as String?;
+    final callerName = data['callerName'] as String? ?? 'Buzz Bee';
+    if (callId == null || connectionId == null || callerUid == null) return;
+    await CallkitService.instance.start();
+    await CallkitService.instance.showIncoming(
+      callId: callId,
+      connectionId: connectionId,
+      callerUid: callerUid,
+      callerName: callerName,
+    );
+  } else if (type == 'call_cancel') {
+    final callId = data['callId'] as String?;
+    if (callId == null) return;
+    await CallkitService.instance.start();
+    await CallkitService.instance.endIncoming(callId);
+  }
+}
 
 /// Handles FCM token registration and foreground buzz vibration.
 ///
@@ -34,6 +69,10 @@ class FcmService {
       sound: false,
     );
 
+    // Register the background isolate handler for call invites that arrive
+    // when the app is killed or in the background.
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
     FirebaseAuth.instance.authStateChanges().listen((user) {
       if (user != null) {
         _registerToken(user.uid);
@@ -47,10 +86,14 @@ class FcmService {
       }
     });
 
-    // Foreground messages: vibrate just once; the Firestore listener covers
-    // the batched pattern already. We still handle this for completeness
-    // when the Firestore listener hasn't fired yet.
-    FirebaseMessaging.onMessage.listen((_) {
+    // Foreground messages: route call data messages through CallkitService;
+    // for buzz/text/voice keep the existing one-shot vibration fallback.
+    FirebaseMessaging.onMessage.listen((message) async {
+      final type = message.data['type'];
+      if (type == 'call_invite' || type == 'call_cancel') {
+        await _routeData(message.data);
+        return;
+      }
       HapticFeedback.vibrate();
     });
   }
