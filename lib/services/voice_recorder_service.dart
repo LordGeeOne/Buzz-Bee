@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
+import '../utils/message_preview.dart';
+
 /// Records short voice notes and uploads them to Firebase Storage,
 /// then writes a `type: 'voice'` doc to the connection's messages.
 ///
@@ -206,6 +208,20 @@ Future<({String messageId, String url})> sendVoiceMessage({
     debugPrint('voice cache seed failed: $e');
   }
 
+  // Two-phase write so we never orphan a Storage object on crash:
+  //   Phase 1: write the message doc with `uploading: true` (no URL yet).
+  //   Phase 2: upload to Storage, then update the doc with URL + size.
+  // The Cloud Function ignores docs while `uploading == true`, so push
+  // notifications only fire after the message is fully realized.
+  await msgRef.set({
+    'fromUid': uid,
+    'type': 'voice',
+    'duration': duration.inMilliseconds,
+    'waveform': waveform,
+    'uploading': true,
+    'timestamp': FieldValue.serverTimestamp(),
+  });
+
   final storageRef = FirebaseStorage.instance.ref(
     'voice/$connectionId/${msgRef.id}.m4a',
   );
@@ -214,20 +230,22 @@ Future<({String messageId, String url})> sendVoiceMessage({
     SettableMetadata(contentType: 'audio/mp4'),
   );
   final url = await storageRef.getDownloadURL();
-  await msgRef.set({
-    'fromUid': uid,
-    'type': 'voice',
+  await msgRef.update({
     'url': url,
-    'duration': duration.inMilliseconds,
+    'storagePath': storageRef.fullPath,
     'size': task.totalBytes,
-    'waveform': waveform,
-    'timestamp': FieldValue.serverTimestamp(),
+    'uploading': FieldValue.delete(),
   });
-  await connRef.update({'lastActivity': FieldValue.serverTimestamp()});
+  await connRef.update({
+    'lastActivity': FieldValue.serverTimestamp(),
+    'lastMessage': MessagePreview.buildLastMessage(type: 'voice', fromUid: uid),
+  });
 
   try {
     await file.delete();
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('voice temp file delete failed: $e');
+  }
 
   return (messageId: msgRef.id, url: url);
 }

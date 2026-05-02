@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../utils/message_preview.dart';
+import 'user_cache.dart';
+
 /// Handles user-to-user connections and related messaging.
 ///
 /// Data model (multi-connection):
@@ -69,27 +72,121 @@ class ConnectionService {
         .map((s) => s.size);
   }
 
+  /// Best-effort lookup of a user's display name + avatar from their
+  /// Firestore profile (the canonical source — `FirebaseAuth.displayName`
+  /// is often empty in this app since usernames live in the user doc).
+  /// Falls back to FirebaseAuth fields and finally to empty strings.
+  static Future<({String name, String photo})> _identityFor(String uid) async {
+    String name = '';
+    String photo = '';
+    try {
+      final data = await UserCache.fetch(uid) ?? const <String, dynamic>{};
+      name = (data['username'] as String?)?.trim() ?? '';
+      if (name.isEmpty) {
+        name = (data['displayName'] as String?)?.trim() ?? '';
+      }
+      photo = (data['photoURL'] as String?) ?? '';
+    } catch (_) {}
+    if (name.isEmpty || photo.isEmpty) {
+      final me = FirebaseAuth.instance.currentUser;
+      if (me != null && me.uid == uid) {
+        if (name.isEmpty) name = me.displayName ?? '';
+        if (photo.isEmpty) photo = me.photoURL ?? '';
+      }
+    }
+    return (name: name, photo: photo);
+  }
+
   /// Send a connect request to [toUid] and create a notification for them.
+  ///
+  /// Runs the existence checks (already-connected? already-sent? reverse
+  /// liked us?) inside a single Firestore transaction so two users liking
+  /// each other concurrently can't both end up with a pending request and
+  /// no connection. Outcomes:
+  ///   * already connected         → no-op
+  ///   * already sent (idempotent) → no-op (no duplicate notification)
+  ///   * reverse like exists       → connection is created in-line +
+  ///                                 both pending requests deleted +
+  ///                                 match notifications dispatched
+  ///   * none of the above         → request doc + notification written
   static Future<void> sendRequest(String toUid) async {
     final me = FirebaseAuth.instance.currentUser;
     if (me == null) return;
 
     final fromUid = me.uid;
-    final fromName = me.displayName ?? '';
-    final fromPhoto = me.photoURL ?? '';
+    if (fromUid == toUid) return;
 
-    await _fs
+    final myIdentity = await _identityFor(fromUid);
+    final fromName = myIdentity.name;
+    final fromPhoto = myIdentity.photo;
+
+    final connId = connectionIdFor(fromUid, toUid);
+    final connRef = _fs.collection('connections').doc(connId);
+    final forwardReqRef = _fs
         .collection('users')
         .doc(toUid)
         .collection('requests')
+        .doc(fromUid);
+    final reverseReqRef = _fs
+        .collection('users')
         .doc(fromUid)
-        .set({
-          'fromUid': fromUid,
-          'fromName': fromName,
-          'fromPhoto': fromPhoto,
-          'timestamp': FieldValue.serverTimestamp(),
-        });
+        .collection('requests')
+        .doc(toUid);
 
+    // Outcome flag set inside the transaction; drives post-commit fan-out.
+    String outcome = 'sent';
+    await _fs.runTransaction((tx) async {
+      final connSnap = await tx.get(connRef);
+      if (connSnap.exists) {
+        outcome = 'connected';
+        return;
+      }
+      final reverseSnap = await tx.get(reverseReqRef);
+      if (reverseSnap.exists) {
+        // Mutual like — create the connection inline. Rules permit this
+        // because the reverse request still exists at rule-eval time
+        // (deletes inside the same txn aren't visible to rule eval).
+        tx.set(connRef, {
+          'users': [fromUid, toUid],
+          'createdAt': FieldValue.serverTimestamp(),
+          'lastActivity': FieldValue.serverTimestamp(),
+          'sent': {fromUid: 0, toUid: 0},
+          'unseen': {fromUid: 0, toUid: 0},
+        });
+        tx.delete(reverseReqRef);
+        // Forward may not exist yet, but delete is safe either way.
+        tx.delete(forwardReqRef);
+        outcome = 'matched';
+        return;
+      }
+      final forwardSnap = await tx.get(forwardReqRef);
+      if (forwardSnap.exists) {
+        outcome = 'duplicate';
+        return;
+      }
+      tx.set(forwardReqRef, {
+        'fromUid': fromUid,
+        'fromName': fromName,
+        'fromPhoto': fromPhoto,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+      outcome = 'sent';
+    });
+
+    if (outcome == 'connected' || outcome == 'duplicate') return;
+
+    if (outcome == 'matched') {
+      await _writeMatchNotifications(
+        meUid: fromUid,
+        meName: fromName,
+        mePhoto: fromPhoto,
+        otherUid: toUid,
+        connId: connId,
+      );
+      return;
+    }
+
+    // outcome == 'sent' → notify recipient.
     await _fs.collection('users').doc(toUid).collection('notifications').add({
       'type': 'request',
       'fromUid': fromUid,
@@ -106,6 +203,11 @@ class ConnectionService {
   /// Multi-connection: a user can be in many connections at once. The
   /// connection id is deterministic per pair, so attempting to accept the
   /// same person twice is idempotent.
+  ///
+  /// Runs as a transaction that first reads the pending request doc, so the
+  /// client can't mistakenly create a connection without an actual incoming
+  /// request. (Firestore security rules enforce the same invariant on the
+  /// server side.)
   static Future<void> acceptRequest(String fromUid) async {
     final me = FirebaseAuth.instance.currentUser;
     if (me == null) return;
@@ -118,26 +220,89 @@ class ConnectionService {
         .doc(myUidLocal)
         .collection('requests')
         .doc(fromUid);
+    // The reverse-direction request can also exist if both users liked each
+    // other concurrently. Always nuke it so a future disconnect doesn't
+    // leave behind an orphan that auto-matches them again.
+    final reverseReqRef = _fs
+        .collection('users')
+        .doc(fromUid)
+        .collection('requests')
+        .doc(myUidLocal);
 
+    await _fs.runTransaction((tx) async {
+      final reqSnap = await tx.get(reqRef);
+      if (!reqSnap.exists) {
+        // Either the request was already accepted/rejected, or the caller is
+        // trying to forge a connection. Either way, abort.
+        throw StateError('No pending request from this user');
+      }
+      final connSnap = await tx.get(connRef);
+      if (!connSnap.exists) {
+        tx.set(connRef, {
+          'users': [myUidLocal, fromUid],
+          'createdAt': FieldValue.serverTimestamp(),
+          'lastActivity': FieldValue.serverTimestamp(),
+          'sent': {myUidLocal: 0, fromUid: 0},
+          'unseen': {myUidLocal: 0, fromUid: 0},
+        });
+      }
+      tx.delete(reqRef);
+      // Safe even if the doc doesn't exist.
+      tx.delete(reverseReqRef);
+    });
+
+    final myIdentity = await _identityFor(myUidLocal);
+    await _writeMatchNotifications(
+      meUid: myUidLocal,
+      meName: myIdentity.name,
+      mePhoto: myIdentity.photo,
+      otherUid: fromUid,
+      connId: connId,
+    );
+  }
+
+  /// Write the two `match` notification docs that drive the in-app popup
+  /// and the FCM push. The accepter's self-notification is tagged
+  /// `skipPush: true` so the cloud function doesn't fan out a redundant
+  /// system notification to the device that just tapped Like.
+  static Future<void> _writeMatchNotifications({
+    required String meUid,
+    required String meName,
+    required String mePhoto,
+    required String otherUid,
+    required String connId,
+  }) async {
+    final other = await _identityFor(otherUid);
     final batch = _fs.batch();
-    batch.set(connRef, {
-      'users': [myUidLocal, fromUid],
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastActivity': FieldValue.serverTimestamp(),
-      'sent': {myUidLocal: 0, fromUid: 0},
-      'unseen': {myUidLocal: 0, fromUid: 0},
-    });
-    batch.delete(reqRef);
+    // Notify the OTHER user (UserA, the original liker).
+    batch.set(
+      _fs.collection('users').doc(otherUid).collection('notifications').doc(),
+      {
+        'type': 'match',
+        'fromUid': meUid,
+        'fromName': meName,
+        'fromPhoto': mePhoto,
+        'connectionId': connId,
+        'read': false,
+        'timestamp': FieldValue.serverTimestamp(),
+      },
+    );
+    // Self-notification for ME (the accepter) — drives the local popup but
+    // suppresses the FCM push (we're already in the foreground).
+    batch.set(
+      _fs.collection('users').doc(meUid).collection('notifications').doc(),
+      {
+        'type': 'match',
+        'fromUid': otherUid,
+        'fromName': other.name,
+        'fromPhoto': other.photo,
+        'connectionId': connId,
+        'read': false,
+        'skipPush': true,
+        'timestamp': FieldValue.serverTimestamp(),
+      },
+    );
     await batch.commit();
-
-    await _fs.collection('users').doc(fromUid).collection('notifications').add({
-      'type': 'request_accepted',
-      'fromUid': myUidLocal,
-      'fromName': me.displayName ?? '',
-      'fromPhoto': me.photoURL ?? '',
-      'read': false,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
   }
 
   /// Reject a request — deletes it.
@@ -152,12 +317,34 @@ class ConnectionService {
         .delete();
   }
 
-  /// Disconnect from a specific connection by id. Deletes the connection doc.
-  /// (Multi-connection model — each connection is removed individually.)
+  /// Disconnect from a specific connection by id. Deletes the connection doc
+  /// and any leftover pending request docs in either direction so a future
+  /// `sendRequest` from either side starts from a clean slate (prevents the
+  /// "old like causes auto-match after reconnect" bug).
   static Future<void> disconnect(String connectionId) async {
     final uid = myUid;
     if (uid == null) return;
-    await _fs.collection('connections').doc(connectionId).delete();
+    final connRef = _fs.collection('connections').doc(connectionId);
+    String? partner;
+    try {
+      final snap = await connRef.get();
+      final users = ((snap.data()?['users'] as List?) ?? const [])
+          .cast<String>();
+      partner = users.firstWhere((u) => u != uid, orElse: () => '');
+      if (partner.isEmpty) partner = null;
+    } catch (_) {}
+
+    final batch = _fs.batch();
+    batch.delete(connRef);
+    if (partner != null) {
+      batch.delete(
+        _fs.collection('users').doc(uid).collection('requests').doc(partner),
+      );
+      batch.delete(
+        _fs.collection('users').doc(partner).collection('requests').doc(uid),
+      );
+    }
+    await batch.commit();
   }
 
   /// Send a non-buzz message (e.g. text) in the given connection.
@@ -165,6 +352,7 @@ class ConnectionService {
     required String connectionId,
     required String type,
     String? text,
+    Map<String, dynamic>? replyTo,
   }) async {
     final uid = myUid;
     if (uid == null) return;
@@ -174,9 +362,17 @@ class ConnectionService {
       'fromUid': uid,
       'type': type,
       if (text != null) 'text': text,
+      if (replyTo != null) 'replyTo': replyTo,
       'timestamp': FieldValue.serverTimestamp(),
     });
-    batch.update(connRef, {'lastActivity': FieldValue.serverTimestamp()});
+    batch.update(connRef, {
+      'lastActivity': FieldValue.serverTimestamp(),
+      'lastMessage': MessagePreview.buildLastMessage(
+        type: type,
+        fromUid: uid,
+        text: text,
+      ),
+    });
     await batch.commit();
   }
 
@@ -218,6 +414,11 @@ class ConnectionService {
       });
       tx.update(connRef, {
         'lastActivity': FieldValue.serverTimestamp(),
+        'lastMessage': MessagePreview.buildLastMessage(
+          type: 'buzz',
+          fromUid: uid,
+          count: count,
+        ),
         'sent.$uid': mySent + count,
         'sent.$partner': 0,
         'unseen.$partner': partnerUnseen + count,

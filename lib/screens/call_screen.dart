@@ -40,7 +40,7 @@ class _CallScreenState extends State<CallScreen>
   Timer? _ticker;
   Duration _elapsed = Duration.zero;
   DateTime? _connectedAt;
-  late final AnimationController _pulse;
+  late AnimationController _pulse;
 
   @override
   void initState() {

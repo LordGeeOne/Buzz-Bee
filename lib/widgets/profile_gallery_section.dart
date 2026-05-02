@@ -35,24 +35,46 @@ class ProfileGallerySection extends StatefulWidget {
 
 class _ProfileGallerySectionState extends State<ProfileGallerySection> {
   final ImagePicker _picker = ImagePicker();
-  final Set<int> _uploadingSlots = {};
+  // Number of uploads currently in flight. Each one renders as a pending
+  // placeholder tile in the grid so the user sees progress for every photo
+  // they queued (camera = 1, gallery = up to remaining slots).
+  int _pendingUploads = 0;
   final Set<String> _deleting = {};
 
   String get _myUid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
-  Future<void> _pickAndUpload(int slotIndex) async {
-    if (_uploadingSlots.contains(slotIndex)) return;
+  int get _remainingSlots {
+    final used = widget.photos.length + _pendingUploads;
+    final left = ProfileGallerySection.maxPhotos - used;
+    return left < 0 ? 0 : left;
+  }
+
+  Future<void> _pickAndUpload() async {
+    if (_remainingSlots == 0) return;
     final source = await _chooseSource();
     if (source == null || !mounted) return;
 
-    XFile? picked;
+    final List<XFile> picked = [];
     try {
-      picked = await _picker.pickImage(
-        source: source,
-        imageQuality: 75,
-        maxWidth: 1440,
-        maxHeight: 1440,
-      );
+      if (source == ImageSource.camera) {
+        final shot = await _picker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 75,
+          maxWidth: 1440,
+          maxHeight: 1440,
+        );
+        if (shot != null) picked.add(shot);
+      } else {
+        final files = await _picker.pickMultiImage(
+          imageQuality: 75,
+          maxWidth: 1440,
+          maxHeight: 1440,
+          // image_picker honors `limit` on Android 13+ / iOS 14+; older OS
+          // returns whatever the user selected and we cap below.
+          limit: _remainingSlots,
+        );
+        picked.addAll(files);
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -60,12 +82,33 @@ class _ProfileGallerySectionState extends State<ProfileGallerySection> {
       ).showSnackBar(SnackBar(content: Text('Could not pick image: $e')));
       return;
     }
-    if (picked == null) return;
+    if (picked.isEmpty) return;
 
-    setState(() => _uploadingSlots.add(slotIndex));
+    // Defensive cap: even if the picker over-returns, never exceed the
+    // remaining slot count.
+    final toUpload = picked.take(_remainingSlots).toList();
+    final overflow = picked.length - toUpload.length;
+    if (overflow > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Only $_remainingSlots slot${_remainingSlots == 1 ? '' : 's'} left — extra photos skipped.',
+          ),
+        ),
+      );
+    }
+
+    setState(() => _pendingUploads += toUpload.length);
+    // Upload concurrently; arrayUnion is idempotent + commutative so we
+    // don't need any ordering between writes.
+    await Future.wait(toUpload.map(_uploadOne));
+  }
+
+  Future<void> _uploadOne(XFile picked) async {
     try {
       final file = File(picked.path);
-      final fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final fileName =
+          '${DateTime.now().millisecondsSinceEpoch}_${picked.name}.jpg';
       final ref = FirebaseStorage.instance.ref('gallery/$_myUid/$fileName');
       await ref.putFile(file, SettableMetadata(contentType: 'image/jpeg'));
       final url = await ref.getDownloadURL();
@@ -78,7 +121,7 @@ class _ProfileGallerySectionState extends State<ProfileGallerySection> {
         context,
       ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
     } finally {
-      if (mounted) setState(() => _uploadingSlots.remove(slotIndex));
+      if (mounted) setState(() => _pendingUploads -= 1);
     }
   }
 
@@ -121,6 +164,15 @@ class _ProfileGallerySectionState extends State<ProfileGallerySection> {
                 label: 'Choose from gallery',
                 icon: HugeIcons.strokeRoundedImage02,
                 onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 4),
+                child: Text(
+                  'You can pick up to $_remainingSlots photo${_remainingSlots == 1 ? '' : 's'} at once.',
+                  textAlign: TextAlign.center,
+                  style: ts.caption.copyWith(color: c.textDim),
+                ),
               ),
             ],
           ),
@@ -277,10 +329,12 @@ class _ProfileGallerySectionState extends State<ProfileGallerySection> {
       );
     }
 
-    // Self: show filled tiles plus a single Add tile for the next slot.
+    // Self: render real photos, then one pending placeholder per in-flight
+    // upload, then a single Add tile if there's still room.
     final showAddTile =
-        widget.isSelf && photos.length < ProfileGallerySection.maxPhotos;
-    final slotCount = photos.length + (showAddTile ? 1 : 0);
+        widget.isSelf &&
+        photos.length + _pendingUploads < ProfileGallerySection.maxPhotos;
+    final slotCount = photos.length + _pendingUploads + (showAddTile ? 1 : 0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -298,8 +352,7 @@ class _ProfileGallerySectionState extends State<ProfileGallerySection> {
             childAspectRatio: 1,
           ),
           itemBuilder: (context, index) {
-            final hasPhoto = index < photos.length;
-            if (hasPhoto) {
+            if (index < photos.length) {
               final url = photos[index];
               final heroTag = 'gallery-${widget.uid}-$index';
               return _PhotoTile(
@@ -311,10 +364,11 @@ class _ProfileGallerySectionState extends State<ProfileGallerySection> {
                     : () => _viewPhoto(url, heroTag),
               );
             }
-            return _AddTile(
-              uploading: _uploadingSlots.contains(index),
-              onTap: () => _pickAndUpload(index),
-            );
+            // Pending uploads come immediately after real photos.
+            if (index < photos.length + _pendingUploads) {
+              return const _AddTile(uploading: true, onTap: null);
+            }
+            return _AddTile(uploading: false, onTap: _pickAndUpload);
           },
         ),
       ],
@@ -429,7 +483,7 @@ class _PhotoTile extends StatelessWidget {
 
 class _AddTile extends StatelessWidget {
   final bool uploading;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _AddTile({required this.uploading, required this.onTap});
 

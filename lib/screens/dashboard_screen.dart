@@ -7,7 +7,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/connection_service.dart';
+import '../services/user_cache.dart';
 import '../theme/nexaryo_colors.dart';
+import '../utils/message_preview.dart';
+import '../utils/time_formatter.dart';
 import '../widgets/blob_background.dart';
 import 'chat_screen.dart';
 import 'people_screen.dart';
@@ -462,7 +465,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                   checked: false,
                   onTap: _uploadImages,
                 ),
-            ],
+            ] else if (_checklistLoaded)
+              const _NewMatchesBanner(),
           ],
         ),
       ),
@@ -496,7 +500,12 @@ class _ContactsList extends StatefulWidget {
 }
 
 class _ContactsListState extends State<_ContactsList> {
-  late final Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _stream;
+  // Process-wide cache of the last connections snapshot. Lets subsequent
+  // mounts of the dashboard render the contact list synchronously, with no
+  // spinner flash, while the live stream refreshes in the background.
+  static List<QueryDocumentSnapshot<Map<String, dynamic>>>? _cachedDocs;
+
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _stream;
 
   @override
   void initState() {
@@ -512,29 +521,43 @@ class _ContactsListState extends State<_ContactsList> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       child: StreamBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
         stream: _stream,
+        initialData: _cachedDocs,
         builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
+          // Show the spinner only on the very first ever load (no cache, no
+          // live data yet). Otherwise render instantly from cache + live.
+          final hasAny = snap.hasData || _cachedDocs != null;
+          if (!hasAny && snap.connectionState == ConnectionState.waiting) {
             return const SizedBox(
               height: 120,
               child: Center(child: CircularProgressIndicator()),
             );
           }
-          final docs = snap.data ?? const [];
-          final partnerUids = <String>[];
+          final docs = snap.data ?? _cachedDocs ?? const [];
+          if (snap.hasData) _cachedDocs = snap.data;
+          final partnerEntries =
+              <({String uid, Map<String, dynamic>? lastMessage})>[];
           if (myUid != null) {
             for (final d in docs) {
-              final users = ((d.data()['users'] as List?) ?? const [])
+              final data = d.data();
+              final users = ((data['users'] as List?) ?? const [])
                   .cast<String>();
               final partner = users.firstWhere(
                 (u) => u != myUid,
                 orElse: () => '',
               );
-              if (partner.isNotEmpty) partnerUids.add(partner);
+              if (partner.isEmpty) continue;
+              final lastMessage = (data['lastMessage'] as Map?)
+                  ?.cast<String, dynamic>();
+              partnerEntries.add((uid: partner, lastMessage: lastMessage));
             }
           }
           final tiles = <Widget>[
-            for (final uid in partnerUids)
-              _ContactTile(uid: uid, onTap: () => widget.onOpenChat(uid)),
+            for (final e in partnerEntries)
+              _ContactTile(
+                uid: e.uid,
+                lastMessage: e.lastMessage,
+                onTap: () => widget.onOpenChat(e.uid),
+              ),
           ];
           if (tiles.isEmpty) {
             return const _EmptyContactsPrompt();
@@ -589,7 +612,7 @@ class _EmptyContactsPrompt extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'No connections yet',
+            'Your Hive is empty',
             textAlign: TextAlign.center,
             style: GoogleFonts.montserrat(
               fontSize: 18,
@@ -640,112 +663,54 @@ class _EmptyContactsPrompt extends StatelessWidget {
 
 class _ContactTile extends StatefulWidget {
   final String uid;
+  final Map<String, dynamic>? lastMessage;
   final VoidCallback onTap;
 
-  const _ContactTile({required this.uid, required this.onTap});
+  const _ContactTile({
+    required this.uid,
+    required this.lastMessage,
+    required this.onTap,
+  });
 
   @override
   State<_ContactTile> createState() => _ContactTileState();
 }
 
 class _ContactTileState extends State<_ContactTile> {
-  Future<DocumentSnapshot<Map<String, dynamic>>>? _future;
-  Stream<QuerySnapshot<Map<String, dynamic>>>? _lastMsgStream;
+  Future<Map<String, dynamic>?>? _future;
 
   // Process-wide caches so name/avatar render synchronously on subsequent
   // mounts (e.g. when navigating back to the dashboard).
-  static final Map<String, ImageProvider> _avatarCache = {};
-  static final Map<String, Map<String, dynamic>> _userDataCache = {};
+  static ImageProvider _avatarProviderFor(String url) =>
+      UserCache.avatarFor(url);
 
-  static ImageProvider _avatarProviderFor(String url) {
-    return _avatarCache.putIfAbsent(url, () => NetworkImage(url));
-  }
-
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  String _previewFor(Map<String, dynamic> m, String myUid) {
-    final type = (m['type'] as String?) ?? 'text';
-    final mine = m['fromUid'] == myUid;
-    final prefix = mine ? 'You: ' : '';
-    switch (type) {
-      case 'buzz':
-        final count = ((m['count'] as num?) ?? 1).toInt();
-        return '${prefix}Buzz${count > 1 ? ' ×$count' : ''}';
-      case 'voice':
-        return '${prefix}🎤 Voice message';
-      case 'call':
-        final outcome = (m['callOutcome'] as String?) ?? 'ended';
-        switch (outcome) {
-          case 'completed':
-            return mine ? 'Outgoing call' : 'Incoming call';
-          case 'missed':
-            return mine ? 'No answer' : 'Missed call';
-          case 'declined':
-            return mine ? 'Call declined' : 'You declined';
-          case 'failed':
-            return "Call didn't connect";
-          default:
-            return 'Call';
-        }
-      case 'text':
-      default:
-        final text = ((m['text'] as String?) ?? '').trim();
-        if (text.isEmpty) return '${prefix}Message';
-        return '$prefix$text';
-    }
-  }
-
-  String _formatTime(DateTime dt) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final that = DateTime(dt.year, dt.month, dt.day);
-    final diffDays = today.difference(that).inDays;
-    if (diffDays == 0) {
-      final h12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-      final m = dt.minute.toString().padLeft(2, '0');
-      final p = dt.hour < 12 ? 'AM' : 'PM';
-      return '$h12:$m $p';
-    }
-    if (diffDays == 1) return 'Yesterday';
-    if (diffDays < 7) {
-      const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      return wd[dt.weekday - 1];
-    }
-    return '${dt.month}/${dt.day}/${dt.year % 100}';
-  }
+  String _formatTime(DateTime dt) => TimeFormatter.formatRelativeTime(dt);
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final myUid = ConnectionService.myUid ?? '';
-    _future ??= FirebaseFirestore.instance
-        .collection('users')
-        .doc(widget.uid)
-        .get()
-        .then((doc) {
-          final d = doc.data();
-          if (d != null) _userDataCache[widget.uid] = d;
-          return doc;
-        });
-    _lastMsgStream ??= FirebaseFirestore.instance
-        .collection('connections')
-        .doc(ConnectionService.connectionIdFor(myUid, widget.uid))
-        .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .snapshots();
-    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    // Only kick off the network fetch if we don't already have cached data.
+    // When cached, the FutureBuilder still resolves immediately because the
+    // future is pre-completed.
+    _future ??= UserCache.fetch(widget.uid);
+    final lastMessage = widget.lastMessage;
+    final preview = lastMessage == null
+        ? 'Say hi 👋'
+        : MessagePreview.format(lastMessage, myUid);
+    final when = lastMessage == null
+        ? null
+        : MessagePreview.timestampOf(lastMessage);
+    final timeText = when == null ? '' : _formatTime(when);
+    return FutureBuilder<Map<String, dynamic>?>(
       future: _future,
+      // Seed with cached data when present so the first frame is non-empty.
+      initialData: UserCache.get(widget.uid),
       builder: (context, snap) {
         // Prefer cached user data so name + avatar appear instantly on
-        // subsequent mounts; fall back to live snapshot data otherwise.
+        // subsequent mounts; fall back to fetched data otherwise.
         final data =
-            _userDataCache[widget.uid] ??
-            snap.data?.data() ??
-            const <String, dynamic>{};
+            UserCache.get(widget.uid) ?? snap.data ?? const <String, dynamic>{};
         final name = (data['name'] as String?)?.trim().isNotEmpty == true
             ? data['name'] as String
             : '';
@@ -772,27 +737,11 @@ class _ContactTileState extends State<_ContactTile> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _lastMsgStream,
-                    builder: (context, msgSnap) {
-                      final docs = msgSnap.data?.docs ?? const [];
-                      String preview;
-                      DateTime? when;
-                      if (docs.isEmpty) {
-                        preview = 'Say hi 👋';
-                      } else {
-                        final m = docs.first.data();
-                        preview = _previewFor(m, ConnectionService.myUid ?? '');
-                        final ts = m['timestamp'];
-                        if (ts is Timestamp) when = ts.toDate();
-                      }
-                      return _tileBody(
-                        c: c,
-                        name: name.isEmpty ? 'User' : name,
-                        preview: preview,
-                        timeText: when == null ? '' : _formatTime(when),
-                      );
-                    },
+                  child: _tileBody(
+                    c: c,
+                    name: name.isEmpty ? 'User' : name,
+                    preview: preview,
+                    timeText: timeText,
                   ),
                 ),
               ],
@@ -982,6 +931,101 @@ class _ChecklistItem extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Soft banner shown in the back-panel "GET STARTED" slot when the
+/// onboarding checklist is fully ticked off. Streams the count of unread
+/// `match`-type notifications and surfaces it as "You have N new matches".
+/// Tapping routes to the dashboard contacts list (which is where matches
+/// land as connections).
+/// Soft banner shown in the back-panel "GET STARTED" slot when the
+/// onboarding checklist is fully ticked off. Surfaces "You have N new
+/// matches" \u2014 i.e. connections you haven't started a conversation in
+/// yet (no `lastMessage` field on the connection doc). This is sticky in
+/// a way the per-popup `match` notification isn't: it keeps nudging the
+/// user until they actually open the chat and send something.
+class _NewMatchesBanner extends StatelessWidget {
+  const _NewMatchesBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+    final stream = FirebaseFirestore.instance
+        .collection('connections')
+        .where('users', arrayContains: uid)
+        .snapshots();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snap) {
+        final docs = snap.data?.docs ?? const [];
+        // A "new match" = a connection where neither side has sent a
+        // message yet. The connection doc is created without `lastMessage`
+        // and that field gets stamped on the first send.
+        final count = docs
+            .where((d) => (d.data())['lastMessage'] == null)
+            .length;
+        if (count == 0) return const SizedBox.shrink();
+        final c = context.colors;
+        final label = count == 1
+            ? 'You have 1 new date in your Hive'
+            : 'You have $count new dates in your Hive';
+        return Padding(
+          padding: const EdgeInsets.only(top: 22),
+          child: Material(
+            color: c.primary.withValues(alpha: 0.18),
+            borderRadius: BorderRadius.circular(16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () {
+                final state = context
+                    .findAncestorStateOfType<_DashboardScreenState>();
+                state?._navigateHome();
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: c.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.favorite,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: GoogleFonts.montserrat(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.chevron_right,
+                      color: Colors.white.withValues(alpha: 0.7),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

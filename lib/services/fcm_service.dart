@@ -61,12 +61,15 @@ class FcmService {
     // handled by the plugin).
     await _fm.requestPermission(alert: true, badge: true, sound: true);
 
-    // Suppress heads-up when app is foreground: Firestore listener handles
-    // vibration + the user can already see the state live.
+    // iOS only. Show the banner + sound even when the app is foreground
+    // — the recipient may be on a different screen than the chat. The
+    // Cloud Function already suppresses the push when the recipient is
+    // actively viewing this chat (via the `viewing.{uid}` flag), so this
+    // never double-fires while the conversation is open.
     await _fm.setForegroundNotificationPresentationOptions(
-      alert: false,
-      badge: false,
-      sound: false,
+      alert: true,
+      badge: true,
+      sound: true,
     );
 
     // Register the background isolate handler for call invites that arrive
@@ -87,15 +90,29 @@ class FcmService {
     });
 
     // Foreground messages: route call data messages through CallkitService;
-    // for buzz/text/voice keep the existing one-shot vibration fallback.
+    // for buzz/text/voice fire a noticeable haptic pattern so the user
+    // feels the incoming message even when the app is open on a different
+    // screen than the conversation.
     FirebaseMessaging.onMessage.listen((message) async {
       final type = message.data['type'];
       if (type == 'call_invite' || type == 'call_cancel') {
         await _routeData(message.data);
         return;
       }
-      HapticFeedback.vibrate();
+      await _foregroundBuzz(type);
     });
+  }
+
+  /// Two short pulses for chat / voice, three for a buzz. Uses
+  /// HapticFeedback so we don't pull in another vibration plugin.
+  Future<void> _foregroundBuzz(String? type) async {
+    final pulses = type == 'buzz' ? 3 : 2;
+    for (var i = 0; i < pulses; i++) {
+      HapticFeedback.vibrate();
+      if (i < pulses - 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+      }
+    }
   }
 
   Future<void> _registerToken(String uid) async {

@@ -52,10 +52,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- Default FCM notification channel for buzz notifications. -->
+        <!-- Default FCM notification channel for buzz notifications.
+             Bumped from `buzz_notifications` because Android freezes the
+             importance of a channel at first creation; rolling the ID is
+             the only way to upgrade to IMPORTANCE_HIGH (heads-up). -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="buzz_notifications" />
+            android:value="buzz_messages_v1" />
 
         <!-- flutter_callkit_incoming registers its own ConnectionService
              receiver, activity, and sound service via its manifest; no

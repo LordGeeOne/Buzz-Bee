@@ -60,25 +60,94 @@ service cloud.firestore {
     }
 
     match /connections/{connectionId} {
-      // Create: caller must be one of the two users in the new doc
+      // Create: caller must be one of the two users in the new doc AND the
+      // other user must already have a pending request from the caller's
+      // perspective (i.e. the caller is accepting an incoming request).
+      // This prevents a malicious client from fabricating a connection with
+      // any user without their consent.
       allow create: if request.auth != null
                     && request.auth.uid in request.resource.data.users
-                    && request.resource.data.users.size() == 2;
-      // Read (get/list): caller must be a participant.
-      // Use .get() with default to safely handle docs missing `users`.
+                    && request.resource.data.users.size() == 2
+                    && exists(/databases/$(database)/documents/users/$(request.auth.uid)/requests/$(
+                         request.resource.data.users[0] == request.auth.uid
+                           ? request.resource.data.users[1]
+                           : request.resource.data.users[0]
+                       ));
+      // Read (get/list): caller must be a participant. Allow reads of
+      // non-existent docs too so client-side existence checks (e.g. the
+      // sendRequest transaction's first `tx.get(connRef)`) don't trip the
+      // rule on a null `resource`.
       allow read: if request.auth != null
-                  && resource.data.get('users', []).hasAny([request.auth.uid]);
+                  && (resource == null
+                      || resource.data.get('users', []).hasAny([request.auth.uid]));
       // Update/delete: caller must be a participant in the existing doc.
+      // When the update touches `lastMessage`, its `fromUid` must equal the
+      // caller — prevents spoofing the other user's last-message preview.
       allow update: if request.auth != null
-                    && resource.data.get('users', []).hasAny([request.auth.uid]);
+                    && resource.data.get('users', []).hasAny([request.auth.uid])
+                    && (
+                      !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage'])
+                      || request.resource.data.lastMessage.fromUid == request.auth.uid
+                    );
       allow delete: if request.auth != null
                     && resource.data.get('users', []).hasAny([request.auth.uid]);
 
       match /messages/{messageId} {
-        // Only connection participants can access messages
-        allow read, write: if request.auth != null
-                           && request.auth.uid in
-                              get(/databases/$(database)/documents/connections/$(connectionId)).data.users;
+        // Read: any participant.
+        allow read: if request.auth != null
+                    && request.auth.uid in
+                       get(/databases/$(database)/documents/connections/$(connectionId)).data.users;
+        // Create: any participant; the message must claim them as the sender.
+        allow create: if request.auth != null
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/connections/$(connectionId)).data.users
+                      && request.resource.data.fromUid == request.auth.uid;
+        // Update: three permitted classes of writes:
+        //   1. SENDER content edits (e.g. two-phase voice/image upload
+        //      completing, plus edit/delete-for-everyone). Restricted to
+        //      a 1h window after the original send and forbidden from
+        //      changing immutable fields (fromUid, type, timestamp).
+        //   2. RECIPIENT stamping ephemeral-media TTL fields
+        //      (deliveredAt / seenAt / expireAt) and nothing else.
+        //   3. ANY participant adding/removing their own reaction in the
+        //      `reactions.<uid>` map slot \u2014 no time limit, no other
+        //      fields touched.
+        allow update: if request.auth != null
+                      && request.auth.uid in
+                         get(/databases/$(database)/documents/connections/$(connectionId)).data.users
+                      && (
+                        // (1) sender editing within 1h window. Use .get()
+                        // with a `request.time` default so that a missing or
+                        // server-pending `timestamp` (which would crash on
+                        // `.toMillis()`) doesn't blanket-fail the rule.
+                        (
+                          request.auth.uid == resource.data.fromUid
+                          && request.time.toMillis() - resource.data.get('timestamp', request.time).toMillis() < 60 * 60 * 1000
+                          && !request.resource.data.diff(resource.data)
+                              .affectedKeys()
+                              .hasAny(['fromUid', 'type', 'timestamp', 'deliveredAt', 'seenAt'])
+                        )
+                        // (2) recipient stamping TTL fields only
+                        || (
+                          request.auth.uid != resource.data.fromUid
+                          && request.resource.data.diff(resource.data)
+                              .affectedKeys()
+                              .hasOnly(['deliveredAt', 'seenAt', 'expireAt'])
+                        )
+                        // (3) any participant toggling their own reaction
+                        || (
+                          request.resource.data.diff(resource.data)
+                              .affectedKeys()
+                              .hasOnly(['reactions'])
+                          && request.resource.data.get('reactions', {})
+                              .diff(resource.data.get('reactions', {}))
+                              .affectedKeys()
+                              .hasOnly([request.auth.uid])
+                        )
+                      );
+        // Delete: server-side only (TTL / cleanup CF). Clients never delete
+        // message docs directly.
+        allow delete: if false;
       }
 
       // Voice-call signaling: WebRTC offer/answer + ICE candidates.

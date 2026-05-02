@@ -5,7 +5,9 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import '../services/connection_service.dart';
+import '../services/user_cache.dart';
 import '../theme/nexaryo_colors.dart';
+import 'profile_screen.dart';
 
 class PeopleScreen extends StatefulWidget {
   const PeopleScreen({super.key});
@@ -24,14 +26,19 @@ class _PeopleScreenState extends State<PeopleScreen>
   // A like from me to one of these will accept (forming a connection).
   Set<String> _incomingLikes = <String>{};
 
+  // UIDs I've already liked this session — used to avoid duplicate Firestore
+  // writes (the request doc is overwritten anyway, but `notifications` uses
+  // `.add()` and would create a new doc per tap).
+  final Set<String> _outgoingLikes = <String>{};
+
   // Drag state
   Offset _drag = Offset.zero;
   bool _animatingOut = false;
 
-  late final AnimationController _swipeCtrl;
+  late AnimationController _swipeCtrl;
   Animation<Offset> _swipeAnim = const AlwaysStoppedAnimation(Offset.zero);
 
-  late final AnimationController _resetCtrl;
+  late AnimationController _resetCtrl;
   Animation<Offset> _resetAnim = const AlwaysStoppedAnimation(Offset.zero);
 
   String get _myUid => FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -69,20 +76,27 @@ class _PeopleScreenState extends State<PeopleScreen>
 
   Future<void> _loadDeck() async {
     setState(() => _loadingDeck = true);
+    // Fresh deck → forget which uids we've liked this session so the user
+    // can re-like after a manual refresh if something went wrong.
+    _outgoingLikes.clear();
     try {
-      // 1) Pull incoming requests (people who already liked me).
-      final reqSnap = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(_myUid)
-          .collection('requests')
-          .get();
+      final fs = FirebaseFirestore.instance;
+
+      // Run the three independent reads in parallel.
+      final results = await Future.wait([
+        fs.collection('users').doc(_myUid).collection('requests').get(),
+        fs
+            .collection('connections')
+            .where('users', arrayContains: _myUid)
+            .get(),
+        fs.collection('users').limit(60).get(),
+      ]);
+      final reqSnap = results[0];
+      final connSnap = results[1];
+      final usersSnap = results[2];
+
       final incomingUids = reqSnap.docs.map((d) => d.id).toSet();
 
-      // 2) Pull existing connections so we can hide already-connected users.
-      final connSnap = await FirebaseFirestore.instance
-          .collection('connections')
-          .where('users', arrayContains: _myUid)
-          .get();
       final connectedUids = <String>{};
       for (final d in connSnap.docs) {
         final users = ((d.data()['users'] as List?) ?? const []).cast<String>();
@@ -90,12 +104,6 @@ class _PeopleScreenState extends State<PeopleScreen>
           if (u != _myUid) connectedUids.add(u);
         }
       }
-
-      // 3) Pull a batch of users.
-      final usersSnap = await FirebaseFirestore.instance
-          .collection('users')
-          .limit(60)
-          .get();
 
       final priority = <Map<String, dynamic>>[];
       final rest = <Map<String, dynamic>>[];
@@ -145,15 +153,24 @@ class _PeopleScreenState extends State<PeopleScreen>
   /// accept the request (forming a connection). Otherwise send a like.
   Future<void> _likeUser(String otherUid) async {
     final isMutual = _incomingLikes.contains(otherUid);
+    // Already liked this session and they haven't liked back — tell the
+    // user instead of silently dropping the tap.
+    if (!isMutual && _outgoingLikes.contains(otherUid)) {
+      _toast('Already sparked');
+      return;
+    }
     try {
       if (isMutual) {
         await ConnectionService.acceptRequest(otherUid);
         if (!mounted) return;
-        _toast("It's a match! ✨");
+        _incomingLikes.remove(otherUid);
+        _outgoingLikes.remove(otherUid);
+        _toast("It's a date! ✨");
       } else {
         await ConnectionService.sendRequest(otherUid);
         if (!mounted) return;
-        _toast('Like sent');
+        _outgoingLikes.add(otherUid);
+        _toast('Spark sent');
       }
     } catch (e) {
       if (!mounted) return;
@@ -417,13 +434,6 @@ class _PeopleScreenState extends State<PeopleScreen>
             icon: HugeIcons.strokeRoundedFavourite,
             color: c.primary,
             onTap: disabled ? null : () => _buttonSwipe(true),
-            big: true,
-          ),
-          _actionBtn(
-            c,
-            icon: HugeIcons.strokeRoundedRefresh,
-            color: c.textSecondary,
-            onTap: _loadingDeck ? null : _loadDeck,
           ),
         ],
       ),
@@ -435,26 +445,24 @@ class _PeopleScreenState extends State<PeopleScreen>
     required List<List<dynamic>> icon,
     required Color color,
     required VoidCallback? onTap,
-    bool big = false,
   }) {
-    final size = big ? 72.0 : 60.0;
-    final iconSize = big ? 30.0 : 24.0;
+    const size = 68.0;
+    const iconSize = 28.0;
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 200),
       opacity: onTap == null ? 0.4 : 1.0,
       child: Material(
-        color: c.card,
-        shape: const CircleBorder(),
+        color: Color.alphaBlend(color.withValues(alpha: 0.22), c.card),
+        shape: CircleBorder(
+          side: BorderSide(color: color.withValues(alpha: 0.55), width: 1.5),
+        ),
+        elevation: 0,
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
-          child: Container(
+          child: SizedBox(
             width: size,
             height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: color, width: 1.5),
-            ),
             child: Center(
               child: HugeIcon(icon: icon, color: color, size: iconSize),
             ),
@@ -501,6 +509,14 @@ class _CardContentState extends State<_CardContent> {
     setState(() => _imgIndex = (_imgIndex - 1 + imgs.length) % imgs.length);
   }
 
+  void _openProfile(BuildContext context, Map<String, dynamic> user) {
+    final uid = user['uid'] as String?;
+    if (uid == null || uid.isEmpty) return;
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => ProfileScreen(uid: uid)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
@@ -522,8 +538,8 @@ class _CardContentState extends State<_CardContent> {
         fit: StackFit.expand,
         children: [
           if (currentPhoto.isNotEmpty)
-            Image.network(
-              currentPhoto,
+            Image(
+              image: UserCache.avatarFor(currentPhoto),
               key: ValueKey(currentPhoto),
               fit: BoxFit.cover,
               gaplessPlayback: true,
@@ -579,48 +595,72 @@ class _CardContentState extends State<_CardContent> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontFamily: 'Beli',
-                          fontSize: 26,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
+                // Name + age + @handle bundle is tappable and opens the
+                // user's profile. Sits above the image-tap zones because
+                // it's later in the parent Stack's child order.
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _openProfile(context, user),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: 'Beli',
+                                fontSize: 26,
+                                height: 1.1,
+                                letterSpacing: 0.5,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                          if (age != null) ...[
+                            const SizedBox(width: 8),
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                '$age',
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(width: 6),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Icon(
+                              Icons.chevron_right,
+                              size: 20,
+                              color: Colors.white.withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                    if (age != null) ...[
-                      const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(
-                          '$age',
+                      if (username.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          '@$username',
                           style: GoogleFonts.montserrat(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.white.withValues(alpha: 0.85),
+                            fontSize: 13,
+                            color: Colors.white.withValues(alpha: 0.7),
                           ),
                         ),
-                      ),
+                      ],
                     ],
-                  ],
-                ),
-                if (username.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    '@$username',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 13,
-                      color: Colors.white.withValues(alpha: 0.7),
-                    ),
                   ),
-                ],
+                ),
                 if (bio.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(
@@ -636,24 +676,28 @@ class _CardContentState extends State<_CardContent> {
               ],
             ),
           ),
-          Positioned(
-            top: 24,
-            left: 20,
-            child: Opacity(
-              opacity: likeOpacity,
-              child: _badge('LIKE', c.primary),
+          // LIKE / PASS badges centered on the card.
+          if (likeOpacity > 0 || passOpacity > 0)
+            Center(
+              child: Opacity(
+                opacity: likeOpacity > 0 ? likeOpacity : passOpacity,
+                child: Transform.rotate(
+                  angle: likeOpacity > 0 ? -0.2 : 0.2,
+                  child: _badge(
+                    likeOpacity > 0 ? 'SPARK' : 'PASS',
+                    likeOpacity > 0 ? c.primary : c.accentWarm,
+                  ),
+                ),
+              ),
             ),
-          ),
+          // Tap zones for image navigation. Constrained to the upper part
+          // of the card so they don't swallow taps on the name/profile
+          // area below.
           Positioned(
-            top: 24,
-            right: 20,
-            child: Opacity(
-              opacity: passOpacity,
-              child: _badge('PASS', c.accentWarm),
-            ),
-          ),
-          // Tap zones (topmost) for image navigation
-          Positioned.fill(
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 200,
             child: Row(
               children: [
                 Expanded(
@@ -690,22 +734,19 @@ class _CardContentState extends State<_CardContent> {
   }
 
   Widget _badge(String text, Color color) {
-    return Transform.rotate(
-      angle: -0.15,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          border: Border.all(color: color, width: 3),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Text(
-          text,
-          style: GoogleFonts.montserrat(
-            color: color,
-            fontWeight: FontWeight.w800,
-            fontSize: 22,
-            letterSpacing: 2,
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+      decoration: BoxDecoration(
+        border: Border.all(color: color, width: 5),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Text(
+        text,
+        style: GoogleFonts.montserrat(
+          color: color,
+          fontWeight: FontWeight.w900,
+          fontSize: 44,
+          letterSpacing: 4,
         ),
       ),
     );

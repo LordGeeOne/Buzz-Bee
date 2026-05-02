@@ -20,6 +20,29 @@ service firebase.storage {
                    && request.resource.contentType.matches('audio/.*');
     }
 
+    // Image messages \u2014 same lifecycle / TTL story as voice. Both
+    // participants can read; either may upload (sender writes, two-phase
+    // pattern) or delete (delete-for-everyone clears the bytes eagerly).
+    // 2 MB cap is generous for the post-compression JPEGs the client emits
+    // (~250 KB target, 500 KB worst case) but tolerant of edge-case PNGs.
+    match /images/{connectionId}/{file} {
+      function isImageParticipant() {
+        return request.auth != null
+          && firestore.exists(
+               /databases/(default)/documents/connections/$(connectionId)
+             )
+          && request.auth.uid in firestore.get(
+               /databases/(default)/documents/connections/$(connectionId)
+             ).data.users;
+      }
+
+      allow read: if isImageParticipant();
+      allow write: if isImageParticipant()
+                   && (request.resource == null
+                       || (request.resource.size < 2 * 1024 * 1024
+                           && request.resource.contentType.matches('image/.*')));
+    }
+
     // Profile gallery photos. Anyone signed in can view; only the
     // owner can upload/delete their own files.
     match /gallery/{uid}/{file} {

@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hugeicons/hugeicons.dart';
 
+import '../../services/device_session_service.dart';
 import '../../theme/nexaryo_colors.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -69,6 +70,10 @@ class _LoginScreenState extends State<LoginScreen> {
         } catch (e) {
           debugPrint('Firestore write failed: $e');
         }
+        // Stamp this device as the active session for the account. Any
+        // other device currently signed in to the same account will see
+        // the mismatch on its user-doc snapshot and self-sign-out.
+        await DeviceSessionService.instance.claimSession(user.uid);
       }
 
       if (mounted && widget.onSignedIn != null) {
@@ -172,7 +177,9 @@ class _LoginScreenState extends State<LoginScreen> {
           'Hey there',
           style: TextStyle(
             fontFamily: 'Beli',
-            fontSize: 28,
+            fontSize: 36,
+            height: 1.1,
+            letterSpacing: 0.5,
             fontWeight: FontWeight.w600,
             color: c.textPrimary,
           ),

@@ -6,6 +6,7 @@ import '../splash_screen.dart';
 import 'about_screen.dart';
 import 'sign_out_screen.dart';
 import 'notes_screen.dart';
+import 'onboarding_screen.dart';
 import 'privacy_policy_screen.dart';
 import 'theme_colors_screen.dart';
 import 'typography_screen.dart';
@@ -144,6 +145,28 @@ class SettingsScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   _NavTile(
+                    icon: HugeIcons.strokeRoundedUserAdd01,
+                    title: 'Onboarding',
+                    subtitle: 'Replay the onboarding flow (debug)',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => OnboardingScreen(
+                          onComplete: () => Navigator.pop(context),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  _NavTile(
+                    icon: HugeIcons.strokeRoundedTimer02,
+                    title: 'Disappearing media',
+                    subtitle:
+                        'Voice messages disappear 1 hour after both users open the chat',
+                    onTap: null,
+                  ),
+                  const SizedBox(height: 10),
+                  _NavTile(
                     icon: HugeIcons.strokeRoundedLogout01,
                     title: 'Sign Out',
                     subtitle: 'Manage your account',
@@ -199,7 +222,7 @@ class _NavTile extends StatelessWidget {
   final List<List<dynamic>> icon;
   final String title;
   final String subtitle;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _NavTile({
     required this.icon,
@@ -260,11 +283,12 @@ class _NavTile extends StatelessWidget {
                   ],
                 ),
               ),
-              HugeIcon(
-                icon: HugeIcons.strokeRoundedArrowRight01,
-                color: c.textDim,
-                size: 20,
-              ),
+              if (onTap != null)
+                HugeIcon(
+                  icon: HugeIcons.strokeRoundedArrowRight01,
+                  color: c.textDim,
+                  size: 20,
+                ),
             ],
           ),
         ),

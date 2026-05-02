@@ -13,6 +13,7 @@ import '../theme/app_text_styles.dart';
 import '../theme/nexaryo_colors.dart';
 import '../widgets/profile_gallery_section.dart';
 import '../services/connection_service.dart';
+import '../services/user_cache.dart';
 import 'auto_bio_screen.dart';
 import 'edit_profile_screen.dart';
 import 'image_viewer_screen.dart';
@@ -72,14 +73,20 @@ class ProfileScreen extends StatelessWidget {
                           .doc(target)
                           .snapshots(),
                       builder: (context, snap) {
-                        if (snap.connectionState == ConnectionState.waiting &&
-                            !snap.hasData) {
+                        // Prefer cached user data so the first frame renders
+                        // synchronously with name + avatar already populated.
+                        final cached = UserCache.get(target);
+                        final liveData = snap.data?.data();
+                        if (liveData != null) {
+                          UserCache.put(target, liveData);
+                        }
+                        final data = liveData ?? cached;
+                        if (data == null) {
+                          // Truly first-ever load with no cache: brief spinner.
                           return Center(
                             child: CircularProgressIndicator(color: c.primary),
                           );
                         }
-                        final data =
-                            snap.data?.data() ?? const <String, dynamic>{};
                         return _ProfileBody(
                           uid: target,
                           data: data,
@@ -201,7 +208,6 @@ class _ProfileBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
     final ts = context.textStyles;
 
     final name = (data['name'] as String?)?.trim().isNotEmpty == true
@@ -402,12 +408,12 @@ class _ConnectActionButtonState extends State<_ConnectActionButton> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Connect request sent')));
+      ).showSnackBar(const SnackBar(content: Text('Spark sent')));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text("Couldn't send request")));
+      ).showSnackBar(const SnackBar(content: Text("Couldn't send spark")));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -420,7 +426,7 @@ class _ConnectActionButtonState extends State<_ConnectActionButton> {
       builder: (ctx) => AlertDialog(
         backgroundColor: c.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-        title: const Text('Disconnect?'),
+        title: const Text('Unmatch?'),
         content: const Text(
           'You will no longer be able to message each other and your chat history will be removed.',
         ),
@@ -432,7 +438,7 @@ class _ConnectActionButtonState extends State<_ConnectActionButton> {
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: c.primary),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Disconnect'),
+            child: const Text('Unmatch'),
           ),
         ],
       ),
@@ -444,12 +450,12 @@ class _ConnectActionButtonState extends State<_ConnectActionButton> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Disconnected')));
+      ).showSnackBar(const SnackBar(content: Text('Unmatched')));
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text("Couldn't disconnect")));
+      ).showSnackBar(const SnackBar(content: Text("Couldn't unmatch")));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -471,8 +477,8 @@ class _ConnectActionButtonState extends State<_ConnectActionButton> {
           label: _busy
               ? 'Please wait…'
               : connected
-              ? 'Disconnect'
-              : 'Connect',
+              ? 'Unmatch'
+              : 'Spark',
           icon: connected
               ? HugeIcons.strokeRoundedUserRemove01
               : HugeIcons.strokeRoundedUserAdd01,
@@ -1121,8 +1127,8 @@ class _ProfilePhotoState extends State<_ProfilePhoto> {
               Hero(
                 tag: widget.heroTag,
                 child: widget.photoUrl.isNotEmpty
-                    ? Image.network(
-                        widget.photoUrl,
+                    ? Image(
+                        image: UserCache.avatarFor(widget.photoUrl),
                         fit: BoxFit.cover,
                         loadingBuilder: (context, child, progress) {
                           if (progress == null) return child;

@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../main.dart';
+import '../../services/device_session_service.dart';
 import '../../services/presence_service.dart';
 import '../../theme/nexaryo_colors.dart';
 import '../dashboard_screen.dart';
@@ -19,8 +19,7 @@ class SignOutScreen extends StatelessWidget {
 
   Future<void> _signOut(BuildContext context) async {
     await PresenceService.instance.stop();
-    await FirebaseAuth.instance.signOut();
-    await GoogleSignIn().signOut();
+    await DeviceSessionService.instance.signOut();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('onboarding_complete');
     navigatorKey.currentState?.pushAndRemoveUntil(
@@ -186,6 +185,8 @@ class SignOutScreen extends StatelessWidget {
                         style: const TextStyle(
                           fontFamily: 'Beli',
                           fontSize: 24,
+                          height: 1.1,
+                          letterSpacing: 0.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),

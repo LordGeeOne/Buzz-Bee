@@ -120,8 +120,8 @@ class _ModeToggle extends StatelessWidget {
             child: Center(
               child: HugeIcon(
                 icon: tp.isDark
-                    ? HugeIcons.strokeRoundedMoon
-                    : HugeIcons.strokeRoundedSun01,
+                    ? HugeIcons.strokeRoundedSun01
+                    : HugeIcons.strokeRoundedMoon,
                 color: c.textSecondary,
                 size: 20,
               ),
@@ -130,7 +130,7 @@ class _ModeToggle extends StatelessWidget {
           const SizedBox(width: 14),
           Expanded(
             child: Text(
-              tp.isDark ? 'Dark Mode' : 'Light Mode',
+              tp.isDark ? 'Light Mode' : 'Dark Mode',
               style: GoogleFonts.montserrat(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
@@ -141,7 +141,7 @@ class _ModeToggle extends StatelessWidget {
           Switch(
             value: tp.isDark,
             onChanged: context.read<ThemeProvider>().setDarkMode,
-            activeColor: c.primary,
+            activeThumbColor: c.primary,
             inactiveTrackColor: c.cardBorder,
           ),
         ],

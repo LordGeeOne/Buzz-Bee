@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:uuid/uuid.dart';
 
+import '../utils/message_preview.dart';
 import 'connection_service.dart';
 
 /// 1:1 voice call signaling + WebRTC orchestration.
@@ -290,7 +292,9 @@ class CallService {
           'sdpMid': cand.sdpMid,
           'sdpMLineIndex': cand.sdpMLineIndex,
         });
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('CallService: ICE candidate write failed: $e');
+      }
     };
 
     _pc!.onConnectionState = (RTCPeerConnectionState state) {
@@ -436,7 +440,9 @@ class CallService {
         connectionId,
         callId,
       ).set(payload, SetOptions(merge: true));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('CallService: state update failed: $e');
+    }
   }
 
   Future<void> _teardown() async {
@@ -455,18 +461,26 @@ class CallService {
       for (final t in tracks) {
         await t.stop();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('CallService: stop tracks failed: $e');
+    }
     try {
       await _localStream?.dispose();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('CallService: local stream dispose failed: $e');
+    }
     _localStream = null;
     try {
       await _remoteStream?.dispose();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('CallService: remote stream dispose failed: $e');
+    }
     _remoteStream = null;
     try {
       await _pc?.close();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('CallService: peer connection close failed: $e');
+    }
     _pc = null;
     _current = null;
     _connectedAt = null;
@@ -498,7 +512,14 @@ class CallService {
         'durationMs': durationMs,
         'timestamp': FieldValue.serverTimestamp(),
       });
-      batch.update(connRef, {'lastActivity': FieldValue.serverTimestamp()});
+      batch.update(connRef, {
+        'lastActivity': FieldValue.serverTimestamp(),
+        'lastMessage': MessagePreview.buildLastMessage(
+          type: 'call',
+          fromUid: myUid,
+          callOutcome: outcome,
+        ),
+      });
       await batch.commit();
     } catch (_) {}
   }

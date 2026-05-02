@@ -11,12 +11,14 @@ import 'providers/theme_provider.dart';
 import 'services/fcm_service.dart';
 import 'services/presence_service.dart';
 import 'services/callkit_service.dart';
+import 'services/device_session_service.dart';
 import 'theme/nexaryo_colors.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/settings/login_screen.dart';
 import 'screens/settings/onboarding_screen.dart';
 import 'screens/splash_screen.dart';
 import 'widgets/call_banner_overlay.dart';
+import 'widgets/match_overlay.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,13 +28,55 @@ void main() async {
   await Future.wait([settings.load(), themeProvider.load()]);
   await FcmService.instance.start();
   await CallkitService.instance.start();
+  // Pre-warm the local device id so it's ready by the time the user signs
+  // in (and so the watcher can compare against it without a round-trip).
+  await DeviceSessionService.instance.ensureLocalDeviceId();
   if (FirebaseAuth.instance.currentUser != null) {
     PresenceService.instance.start();
+    DeviceSessionService.instance.watch(
+      FirebaseAuth.instance.currentUser!.uid,
+      _handleKickedFromSession,
+    );
   }
+  // Re-arm / tear-down the watcher whenever auth state changes.
+  FirebaseAuth.instance.authStateChanges().listen((user) {
+    if (user == null) {
+      DeviceSessionService.instance.stopWatch();
+    } else {
+      DeviceSessionService.instance.watch(user.uid, _handleKickedFromSession);
+    }
+  });
   runApp(NexaryoStyleGuide(settings: settings, themeProvider: themeProvider));
 }
 
 final navigatorKey = GlobalKey<NavigatorState>();
+
+/// Called when this device's session was superseded by another sign-in.
+/// Signs out, returns to the login screen, and shows a brief notice.
+Future<void> _handleKickedFromSession() async {
+  await PresenceService.instance.stop();
+  await DeviceSessionService.instance.signOut();
+  final nav = navigatorKey.currentState;
+  if (nav == null) return;
+  nav.pushAndRemoveUntil(
+    MaterialPageRoute(
+      builder: (_) => LoginScreen(
+        onSignedIn: () async {
+          // After re-login, return to the splash entry which routes the user.
+          navigatorKey.currentState?.pushReplacement(
+            MaterialPageRoute(builder: (_) => const _SplashEntry()),
+          );
+        },
+      ),
+    ),
+    (_) => false,
+  );
+  final ctx = nav.overlay?.context ?? nav.context;
+  // ignore: use_build_context_synchronously
+  ScaffoldMessenger.maybeOf(ctx)?.showSnackBar(
+    const SnackBar(content: Text('Signed in on another device.')),
+  );
+}
 
 class NexaryoStyleGuide extends StatelessWidget {
   final SettingsProvider settings;
@@ -62,7 +106,11 @@ class NexaryoStyleGuide extends StatelessWidget {
             themeMode: theme.themeMode,
             home: const _SplashEntry(),
             builder: (context, child) {
-              return CallBannerOverlay(child: child ?? const SizedBox.shrink());
+              return MatchOverlay(
+                child: CallBannerOverlay(
+                  child: child ?? const SizedBox.shrink(),
+                ),
+              );
             },
           );
         },

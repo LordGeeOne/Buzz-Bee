@@ -77,18 +77,37 @@ class PresenceService with WidgetsBindingObserver {
   /// Stream another user's online state. Emits `true` only when the remote
   /// flag is set AND the heartbeat is fresh enough.
   static Stream<bool> watchOnline(String uid) {
+    return watchPresence(uid).map((p) => p.online);
+  }
+
+  /// Stream another user's full presence: live online flag + last heartbeat
+  /// timestamp. Use this when you need to render "Last seen ..." once the
+  /// user is offline.
+  static Stream<PresenceSnapshot> watchPresence(String uid) {
     return FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .snapshots()
         .map((snap) {
           final data = snap.data();
-          if (data == null) return false;
-          if (data['online'] != true) return false;
+          if (data == null) return const PresenceSnapshot(online: false);
           final ts = data['lastSeen'];
-          if (ts is! Timestamp) return false;
-          final age = DateTime.now().difference(ts.toDate());
-          return age < staleAfter;
+          final lastSeen = ts is Timestamp ? ts.toDate() : null;
+          var online = data['online'] == true;
+          if (online && lastSeen != null) {
+            final age = DateTime.now().difference(lastSeen);
+            if (age >= staleAfter) online = false;
+          } else if (online && lastSeen == null) {
+            online = false;
+          }
+          return PresenceSnapshot(online: online, lastSeen: lastSeen);
         });
   }
+}
+
+/// Snapshot of a user's presence at a moment in time.
+class PresenceSnapshot {
+  final bool online;
+  final DateTime? lastSeen;
+  const PresenceSnapshot({required this.online, this.lastSeen});
 }
